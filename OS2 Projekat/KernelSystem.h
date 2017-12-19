@@ -2,6 +2,8 @@
 
 #include <vector>
 #include <iostream>
+#include <unordered_map>
+
 #include "vm_declarations.h"
 #include "part.h"
 
@@ -38,8 +40,8 @@ private:									// private attributes
 
 	Partition* partition;
 
-	ProcessId processIDGenerator = 0;					// generates the ID for each new process
-	std::vector<Process*> activeProcesses;				// active process list
+	ProcessId processIDGenerator = 0;							// generates the ID for each new process
+	std::unordered_map<ProcessId, Process*> activeProcesses;	// active process hash map
 
 	PhysicalAddress clockHand;							// place initial value to VMSpace, indicating block 0 is the first free block
 	PhysicalAddress freePMTSlotHead;					// head for the PMT1 blocks
@@ -53,25 +55,34 @@ private:									// private attributes
 	// pri cemu se za svaki segment pamti svasta
 
 															// CONSTANTS
-	static const unsigned short usefulBitLength = 24;
-	static const unsigned short page1PartBitLength = 8;		// lengths of parts of the virtual address (in bits)
-	static const unsigned short page2PartBitLength = 6;
-	static const unsigned short wordPartBitLength = 10;
+	static const unsigned short usefulBitLength    = 24;
+	static const unsigned short page1PartBitLength =  8;	// lengths of parts of the virtual address (in bits)
+	static const unsigned short page2PartBitLength =  6;
+	static const unsigned short wordPartBitLength  = 10;
+
+	static const unsigned short PMT1Size = 256;				// pmt1 and pmt2 sizes
+	static const unsigned short PMT2Size =  64;
 
 	struct PMT2Descriptor {
-		bool v;
+		bool v;												// valid and dirty bits
 		bool d;
+
+		bool rd;											// read/write/execute bits
+		bool wr;
+		bool ex;
+
 		bool refClockhand;
 		bool refThrashing;
 		bool copyOnWrite;
+
 		// bool firstAccess; // za createSegment?
 		unsigned block;				// remember only the first 22 bits because each block has a size of 1KB
 		PhysicalAddress next;		// next in segment (if taken) or next in the global politics swapping technique
 		ClusterNo disk;				// which cluster holds this exact page
 	};
 
-	typedef PMT2Descriptor PMT2[64];
-	typedef PMT2* PMT1[256];
+	typedef PMT2Descriptor PMT2[PMT2Size];
+	typedef PMT2* PMT1[PMT1Size];
 
 	friend class Process;
 	friend class KernelProcess;

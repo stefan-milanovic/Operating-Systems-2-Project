@@ -66,6 +66,10 @@ Process* KernelSystem::createProcess() {
 	Process* newProcess = new Process(processIDGenerator++);
 
 	newProcess->pProcess->PMT1 = (PMT1*)freePMTSlotHead;					// assign a free PMT page
+	for (unsigned short i = 0; i < PMT1Size; i++) {							// initialise all of its pointers to nullptr
+		(*(newProcess->pProcess->PMT1))[i] = nullptr;
+	}
+
 	freePMTSlotHead = (PhysicalAddress)(*((unsigned*)freePMTSlotHead));		// move the pmt list head
 
 	// do other things if needed
@@ -79,45 +83,14 @@ Time KernelSystem::periodicJob() {}
 Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType type) {
 
 	// Page1 - 8 bits ; Page2 - 6 bits ; Word - 10 bits
-		
+	
 	Process* wantedProcess = nullptr;
-	/*
-	std::for_each(activeProcesses.begin(), activeProcesses.end(), [pid, &wantedProcess](Process* process) {
-		if (process->getProcessId() == pid) {
-			wantedProcess = process;
-		}
-	});
-	*/ 
-
-	for (std::vector<Process*>::iterator process = activeProcesses.begin(); process != activeProcesses.end(); ++process) {
-		if ((*process)->getProcessId() == pid) {
-			wantedProcess = *process;
-			break;
-		}
+	try {
+		wantedProcess = activeProcesses.at(pid);								// check for the key but don't insert if nonexistant 
+	}																			// (that is what unordered_map::operator[] would do)
+	catch (std::out_of_range noProcessWithPID) {
+		return TRAP;
 	}
-
-	/* std::_Vector_iterator<std::_Vector_val<std::_Simple_types<Process*>>> 
-	for (auto process = activeProcesses.begin(); process != activeProcesses.end(); process++) {
-		if (process.elem)
-	} */ 
-
-	if (!wantedProcess) return TRAP; // ? 
-
-	bool segmentFound = false;													// check if the address belongs to an allocated segment
-	for (std::vector<KernelProcess::SegmentInfo>::iterator segment = wantedProcess->pProcess->segments.begin();
-		segment != wantedProcess->pProcess->segments.end(); ++segment) {
-		VirtualAddress segStartAddress = segment->startAddress, segEndAddress = segment->startAddress + segment->length * PAGE_SIZE;
-
-		if (segStartAddress <= address && address <= segEndAddress) {			// the address belongs to a segment
-			segmentFound = true;
-			if (type != segment->accessType)
-				return TRAP;													// invalid type of operation
-			else
-				break;
-		}
-	}
-
-	if (!segmentFound) return TRAP;												// the address doesn't belong to any segment currently
 
 	unsigned page1Part = 0;														// extract parts of the virtual address	
 	unsigned page2Part = 0;
@@ -136,13 +109,31 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 		mask <<= 1;
 	}
 
-	PMT1* pmt1 = wantedProcess->pProcess->PMT1;
-	PMT2* pmt2 = (*pmt1)[page1Part];
-	PMT2Descriptor pageDescriptor = (*pmt2)[page2Part];
+	PMT1* pmt1 = wantedProcess->pProcess->PMT1;									// access the PMT1 of the process
+	PMT2* pmt2 = (*pmt1)[page1Part];											// attempt access to a PMT2 pointer
+	
+	if (!pmt2) return PAGE_FAULT;												// not even the pmt2 is created -- return page fault
 
-	if (pageDescriptor.v == 0)
+	PMT2Descriptor* pageDescriptor = &(*pmt2)[page2Part];							// access the targetted descriptor
+
+	if (pageDescriptor->v == 0)													// the page isn't loaded in memory -- return page fault
 		return PAGE_FAULT;
-	else 
+	else {
+		switch (type) {															// check access flags
+		case READ:
+			if (!pageDescriptor->rd) return TRAP;
+			break;
+		case WRITE:
+			if (!pageDescriptor->wr) return TRAP;
+			break;
+		case READ_WRITE:
+			if (!pageDescriptor->rd || !pageDescriptor->wr) return TRAP;
+			break;
+		case EXECUTE:
+			if (!pageDescriptor->ex) return TRAP;
+			break;
+		}
 		return OK;
+	}
 
 }

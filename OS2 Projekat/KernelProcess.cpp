@@ -3,7 +3,8 @@
 #include "vm_declarations.h"
 
 KernelProcess::KernelProcess(ProcessId pid) {
-	this->id = pid;
+	this->id = pid;											// assign the id of the process
+	// ...													// other parameters are assigned in the KernelSystem's createProcess()
 }
 
 KernelProcess::~KernelProcess() {
