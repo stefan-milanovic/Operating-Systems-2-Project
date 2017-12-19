@@ -9,8 +9,6 @@ class KernelProcess {
 
 public:
 
-	// KOD CR/LOAD SEG - proveri da li je poravnat na virtuelni blok (nizih 10b su 0) i da li se ne preklapa sa drugim segmentom
-
 	KernelProcess(ProcessId pid);
 
 	~KernelProcess();	// check if needed
@@ -25,6 +23,10 @@ public:
 
 	Status pageFault(VirtualAddress address);
 	PhysicalAddress getPhysicalAddress(VirtualAddress address);
+
+private:
+
+	bool inconsistencyCheck(VirtualAddress startAddress, PageNum segmentSize);
 
 private:
 		

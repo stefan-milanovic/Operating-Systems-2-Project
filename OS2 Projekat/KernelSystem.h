@@ -30,7 +30,8 @@ public:
 	// Hardware job
 	Status access(ProcessId pid, VirtualAddress address, AccessType type);
 
-private:									// private attributes
+
+private:																			// private attributes
 
 	PhysicalAddress processVMSpace;
 	PageNum processVMSpaceSize;
@@ -64,21 +65,35 @@ private:									// private attributes
 	static const unsigned short PMT2Size =  64;
 
 	struct PMT2Descriptor {
-		bool v;												// valid and dirty bits
-		bool d;
+		bool v = 0;											// valid and dirty bits
+		bool d = 0;
 
 		bool rd;											// read/write/execute bits
 		bool wr;
 		bool ex;
 
-		bool refClockhand;
-		bool refThrashing;
+		bool refClockhand = 0;
+		bool refThrashing = 0;
 		bool copyOnWrite;
 
 		// bool firstAccess; // za createSegment?
-		unsigned block;				// remember only the first 22 bits because each block has a size of 1KB
-		PhysicalAddress next;		// next in segment (if taken) or next in the global politics swapping technique
-		ClusterNo disk;				// which cluster holds this exact page
+		PhysicalAddress block;								// remember pointer to a block of physical memory
+		PhysicalAddress next;								// next in the global politics swapping technique
+		ClusterNo disk;										// which cluster holds this exact page
+
+		PMT2Descriptor() {}
+
+		void setRd() { rd = 1; }
+		void setWr() { wr = 1; }
+		void setRdWr() { rd = wr = 1; }
+		void setEx() { ex = 1; }
+		
+		void setRefClockhand() { refClockhand = 1; }
+		void resetRefClockhand() { refClockhand = 0; }
+
+		void setRefThrashing() { refThrashing = 1; }
+		void resetRefThrashing() { refThrashing = 0; }
+
 	};
 
 	typedef PMT2Descriptor PMT2[PMT2Size];
@@ -86,6 +101,10 @@ private:									// private attributes
 
 	friend class Process;
 	friend class KernelProcess;
+
+private:
+
+	static PMT2Descriptor* getPageDescriptor(const KernelProcess* process, VirtualAddress address);
 
 };
 

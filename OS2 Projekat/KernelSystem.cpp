@@ -92,29 +92,8 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 		return TRAP;
 	}
 
-	unsigned page1Part = 0;														// extract parts of the virtual address	
-	unsigned page2Part = 0;
-	unsigned wordPart = 0;
-
-	for (VirtualAddress mask = 1, unsigned i = 0; i < usefulBitLength; i++) {
-		if (i < wordPartBitLength) {
-			wordPart |= address & mask;
-		}
-		else if (i < wordPartBitLength + page2PartBitLength) {
-			page2Part |= address & mask;
-		}
-		else {
-			page1Part |= address & mask;
-		}
-		mask <<= 1;
-	}
-
-	PMT1* pmt1 = wantedProcess->pProcess->PMT1;									// access the PMT1 of the process
-	PMT2* pmt2 = (*pmt1)[page1Part];											// attempt access to a PMT2 pointer
-	
-	if (!pmt2) return PAGE_FAULT;												// not even the pmt2 is created -- return page fault
-
-	PMT2Descriptor* pageDescriptor = &(*pmt2)[page2Part];							// access the targetted descriptor
+	PMT2Descriptor* pageDescriptor = getPageDescriptor(wantedProcess->pProcess, address);
+	if (!pageDescriptor) return PAGE_FAULT;										// if PMT2 isn't created
 
 	if (pageDescriptor->v == 0)													// the page isn't loaded in memory -- return page fault
 		return PAGE_FAULT;
@@ -135,5 +114,31 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 		}
 		return OK;
 	}
+
+}
+
+KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProcess* process, VirtualAddress address) {
+	unsigned page1Part = 0;														// extract parts of the virtual address	
+	unsigned page2Part = 0;
+	unsigned wordPart = 0;
+
+	for (VirtualAddress mask = 1, unsigned i = 0; i < usefulBitLength; i++) {
+		if (i < wordPartBitLength) {
+			wordPart |= address & mask;
+		}
+		else if (i < wordPartBitLength + page2PartBitLength) {
+			page2Part |= address & mask;
+		}
+		else {
+			page1Part |= address & mask;
+		}
+		mask <<= 1;
+	}
+
+	PMT1* pmt1 = process->PMT1;												// access the PMT1 of the process
+	PMT2* pmt2 = (*pmt1)[page1Part];										// attempt access to a PMT2 pointer
+
+	if (!pmt2) return nullptr;
+	else return &(*pmt2)[page2Part];										// access the targetted descriptor
 
 }
