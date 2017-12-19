@@ -31,7 +31,7 @@ public:
 	Status access(ProcessId pid, VirtualAddress address, AccessType type);
 
 
-private:																			// private attributes
+private:																		// private attributes
 
 	PhysicalAddress processVMSpace;
 	PageNum processVMSpaceSize;
@@ -41,34 +41,38 @@ private:																			// private attributes
 
 	Partition* partition;
 
-	ProcessId processIDGenerator = 0;							// generates the ID for each new process
-	std::unordered_map<ProcessId, Process*> activeProcesses;	// active process hash map
+	ProcessId processIDGenerator = 0;											// generates the ID for each new process
+	std::unordered_map<ProcessId, Process*> activeProcesses;					// active process hash map
 
-	PhysicalAddress clockHand;							// place initial value to VMSpace, indicating block 0 is the first free block
-	PhysicalAddress freePMTSlotHead;					// head for the PMT1 blocks
-	PhysicalAddress freeBlocksHead;						// head for the free physical blocks in memory
+	struct PMT2Descriptor;
+	PMT2Descriptor* clockHand;													// clockhand for the second chance swapping algorithm
 
-	unsigned clusterUsageVectorHead = 0;				// Indicates the first next free cluster.
-	unsigned clusterUsageVectorSize;
-	unsigned* clusterUsageVector;						// vector of free clusters. Index inside the vector points to the next free cluster number.
+	PhysicalAddress freePMTSlotHead;											// head for the PMT1 blocks
+	PhysicalAddress freeBlocksHead;												// head for the free physical blocks in memory
+	PageNum numberOfFreeBlocks;
+
+	ClusterNo clusterUsageVectorHead = 0;										// Indicates the first next free cluster.
+	ClusterNo clusterUsageVectorSize;
+	ClusterNo numberOfFreeClusters;
+	ClusterNo* clusterUsageVector;				// vector of free clusters. Index inside the vector points to the next free cluster number.
 
 	// ima listu svakog aktivnog procesa -> svaki aktivni proces ima svoj PMT1 i listu svojih segmenata,
 	// pri cemu se za svaki segment pamti svasta
 
-															// CONSTANTS
+																				// CONSTANTS
 	static const unsigned short usefulBitLength    = 24;
-	static const unsigned short page1PartBitLength =  8;	// lengths of parts of the virtual address (in bits)
+	static const unsigned short page1PartBitLength =  8;						// lengths of parts of the virtual address (in bits)
 	static const unsigned short page2PartBitLength =  6;
 	static const unsigned short wordPartBitLength  = 10;
 
-	static const unsigned short PMT1Size = 256;				// pmt1 and pmt2 sizes
+	static const unsigned short PMT1Size = 256;									// pmt1 and pmt2 sizes
 	static const unsigned short PMT2Size =  64;
 
 	struct PMT2Descriptor {
-		bool v = 0;											// valid and dirty bits
+		bool v = 0;																// valid and dirty bits
 		bool d = 0;
 
-		bool rd;											// read/write/execute bits
+		bool rd;																// read/write/execute bits
 		bool wr;
 		bool ex;
 
@@ -76,10 +80,12 @@ private:																			// private attributes
 		bool refThrashing = 0;
 		bool copyOnWrite;
 
+		bool hasClusterReserved = 0;											// no cluster is initially reserved
+			
 		// bool firstAccess; // za createSegment?
-		PhysicalAddress block;								// remember pointer to a block of physical memory
-		PhysicalAddress next;								// next in the global politics swapping technique
-		ClusterNo disk;										// which cluster holds this exact page
+		PhysicalAddress block;													// remember pointer to a block of physical memory
+		PhysicalAddress next;													// next in segment and next in the global politics swapping technique
+		ClusterNo disk;															// which cluster holds this exact page
 
 		PMT2Descriptor() {}
 

@@ -14,9 +14,11 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 	this->processVMSpace = processVMSpace;								// initialise memory containing physical blocks
 	this->processVMSpaceSize = processVMSpaceSize;
 
-	this->clockHand = processVMSpace;									// assign head pointers
+	this->clockHand = nullptr;											// assign head pointers
 	this->freeBlocksHead = processVMSpace;
 	this->freePMTSlotHead = pmtSpace;
+
+	this->numberOfFreeBlocks = processVMSpaceSize;
 
 	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;	// initialise lists
 	for (int i = 0; i < (processVMSpaceSize <= pmtSpaceSize ? pmtSpaceSize : processVMSpaceSize); i++) {
@@ -45,13 +47,13 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 
 	this->partition = partition;										// assign the partition pointer
 
-	this->clusterUsageVector = new unsigned(this->clusterUsageVectorSize = partition->getNumOfClusters()); // create cluster usage vector
+	this->clusterUsageVector = new ClusterNo(this->clusterUsageVectorSize = partition->getNumOfClusters()); // create cluster usage vector
 	this->clusterUsageVectorHead = 0;
 	for (int i = 0; i < clusterUsageVectorSize - 1; i++) {				// initialise it
 		clusterUsageVector[i] = i + 1;
 	}
 	clusterUsageVector[clusterUsageVectorSize - 1] = -1;
-
+	this->numberOfFreeClusters = this->clusterUsageVectorSize;			// assign number of free clusters
 
 }
 
