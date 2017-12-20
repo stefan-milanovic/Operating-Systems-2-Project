@@ -49,10 +49,10 @@ private:
 		~SegmentInfo() {}
 	};
 
-	std::vector<SegmentInfo> segments;				// current segment list
-	ProcessId id;									// process id
-	KernelSystem* system;							// the system this process is being run on, set in system's createProcess()
-	KernelSystem::PMT1* PMT1;						// page map table pointer of the first level, set in system's createProcess()
+	std::vector<SegmentInfo> segments;					// current segment list
+	ProcessId id;										// process id
+	KernelSystem* system;								// the system this process is being run on, set in system's createProcess()
+	KernelSystem::PMT1* PMT1;							// page map table pointer of the first level, set in system's createProcess()
 
 	friend class System;
 	friend class KernelSystem;

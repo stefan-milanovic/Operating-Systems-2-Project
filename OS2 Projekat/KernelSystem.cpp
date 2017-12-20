@@ -92,22 +92,22 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 	PMT2Descriptor* pageDescriptor = getPageDescriptor(wantedProcess->pProcess, address);
 	if (!pageDescriptor) return PAGE_FAULT;										// if PMT2 isn't created
 
-	if (pageDescriptor->v == 0)													// the page isn't loaded in memory -- return page fault
+	if (!pageDescriptor->getV())												// the page isn't loaded in memory -- return page fault
 		return PAGE_FAULT;
 	else {
 		switch (type) {															// check access rights
 		case READ:
-			if (!pageDescriptor->rd) return TRAP;
+			if (!pageDescriptor->getRd()) return TRAP;
 			break;
 		case WRITE:
-			if (!pageDescriptor->wr) return TRAP;
+			if (!pageDescriptor->getWr()) return TRAP;
 			pageDescriptor->setD();												// the page has been written in
 			break;
 		case READ_WRITE:
-			if (!pageDescriptor->rd || !pageDescriptor->wr) return TRAP;
+			if (!pageDescriptor->getRd() || !pageDescriptor->getWr()) return TRAP;
 			break;
 		case EXECUTE:
-			if (!pageDescriptor->ex) return TRAP;
+			if (!pageDescriptor->getEx()) return TRAP;
 			break;
 		}
 		return OK;																// page is in memory and the operation is allowed

@@ -8,18 +8,18 @@
 #include "vm_declarations.h"
 
 KernelProcess::KernelProcess(ProcessId pid) {
-	this->id = pid;											// assign the id of the process
-	// ...													// other parameters are assigned in the KernelSystem's createProcess()
+	this->id = pid;																	// assign the id of the process
+	// ...																			// other members are assigned in KernelSystem's createProcess()
 }
 
 KernelProcess::~KernelProcess() {
-
-	while (segments.size() > 0) {							// remove any leftover segments from memory and/or disk
+		
+	while (segments.size() > 0) {													// remove any leftover segments from memory and/or disk
 		optimisedDeleteSegment(&(segments.back()));
 		segments.pop_back();
 	}
 
-	system->activeProcesses.erase(id);						// remove the process from the system's active process hash map
+	system->activeProcesses.erase(id);												// remove the process from the system's active process hash map
 }
 
 Status KernelProcess::createSegment(VirtualAddress startAddress, PageNum segmentSize,
@@ -91,6 +91,7 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];	// access the targetted descriptor
 		if (!pageOffsetCounter) firstDescriptor = pageDescriptor;
 
+		pageDescriptor->setInUse();													// set that the descriptor is now in use
 		switch (flags) {															// set access rights
 		case READ:
 			pageDescriptor->setRd();
@@ -108,7 +109,7 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 
 		void* pageContent = (void*)((char*)content + pageOffsetCounter++ * PAGE_SIZE);
 		pageDescriptor->setDisk(system->diskManager->write(pageContent));			// the disk manager's write() returns the cluster number
-		pageDescriptor->setClusterBit();											// the page's location on the partition is known
+		pageDescriptor->setHasCluster();											// the page's location on the partition is known
 
 		if (!system->clockHand) {													// chain the descriptor in the clockhand list
 			system->clockHand = pageDescriptor;
@@ -159,7 +160,16 @@ Status KernelProcess::deleteSegment(VirtualAddress startAddress) {
 
 Status KernelProcess::pageFault(VirtualAddress address) {
 	
+	// returns trap if blocks are full but disk is full as well
 
+	KernelSystem::PMT2Descriptor* pageDescriptor = KernelSystem::getPageDescriptor(this, address);
+	if (!pageDescriptor) {															// if there is no pmt2 for this address (aka random address)
+		return TRAP;
+	}
+
+	if (!pageDescriptor->getInUse()) {												// access of random descriptor, page is not part of any segment
+		return TRAP;
+	}
 	return OK;
 }
 
@@ -167,9 +177,9 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 
 	KernelSystem::PMT2Descriptor* pageDescriptor = KernelSystem::getPageDescriptor(this, address);
 
-	if (!pageDescriptor) return 0;
+	if (!pageDescriptor) return 0;															// pmt2 not allocated
 
-	if (!pageDescriptor->v) return 0;
+	if (!pageDescriptor->getV()) return 0;													// page isn't loaded in memory
 
 	PhysicalAddress pageBase = pageDescriptor->block;										// extract base of page;
 	unsigned long word = 0;
@@ -230,16 +240,16 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 	KernelSystem::PMT2Descriptor* startDescriptor = segment->firstDescAddress;
 	KernelSystem::PMT2Descriptor* temp = startDescriptor;
 
-	for (PageNum i = 0; i < segment->length; i++, temp = temp->next) {			// for each page of the segment do
+	for (PageNum i = 0; i < segment->length; i++, temp = temp->next) {					// for each page of the segment do
 
-		if (temp->v) {																// if the page is in memory, declare the block as free
+		if (temp->getV()) {																// if the page is in memory, declare the block as free
 			unsigned* block = (unsigned*)temp->block;
 
 			*block = (unsigned)((char*)system->freeBlocksHead);
 			system->freeBlocksHead = block;
 		}
 
-		if (temp->hasCluster) {														// if the page is saved on disk, declare the cluster as free
+		if (temp->getHasCluster()) {													// if the page is saved on disk, declare the cluster as free
 			system->diskManager->freeCluster(temp->disk);
 		}
 	}
