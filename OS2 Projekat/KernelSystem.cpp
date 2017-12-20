@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <iterator>
 
+#include "DiskManager.h"
 #include "KernelSystem.h"
 #include "System.h"
 #include "KernelProcess.h"
@@ -17,6 +18,9 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 	this->clockHand = nullptr;											// assign head pointers
 	this->freeBlocksHead = processVMSpace;
 	this->freePMTSlotHead = pmtSpace;
+
+
+	this->diskManager = new DiskManager(partition);						// create the manager for the partition
 
 	this->numberOfFreeBlocks = processVMSpaceSize;
 
@@ -44,21 +48,10 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 
 	this->pmtSpace = pmtSpace;											// initialise memory for the page map tables
 	this->pmtSpaceSize = pmtSpaceSize;
-
-	this->partition = partition;										// assign the partition pointer
-
-	this->clusterUsageVector = new ClusterNo(this->clusterUsageVectorSize = partition->getNumOfClusters()); // create cluster usage vector
-	this->clusterUsageVectorHead = 0;
-	for (int i = 0; i < clusterUsageVectorSize - 1; i++) {				// initialise it
-		clusterUsageVector[i] = i + 1;
-	}
-	clusterUsageVector[clusterUsageVectorSize - 1] = -1;
-	this->numberOfFreeClusters = this->clusterUsageVectorSize;			// assign number of free clusters
-
 }
 
 KernelSystem::~KernelSystem() {
-	delete[] clusterUsageVector;
+	delete diskManager;
 }
 
 Process* KernelSystem::createProcess() {

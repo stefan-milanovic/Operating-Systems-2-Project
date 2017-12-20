@@ -33,6 +33,9 @@
     <ClInclude Include="part.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DiskManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="System.cpp">
@@ -45,6 +48,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="KernelProcess.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DiskManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

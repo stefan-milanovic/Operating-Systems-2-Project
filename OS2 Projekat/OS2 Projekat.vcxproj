@@ -19,6 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DiskManager.h" />
     <ClInclude Include="KernelProcess.h" />
     <ClInclude Include="KernelSystem.h" />
     <ClInclude Include="part.h" />
@@ -27,6 +28,7 @@
     <ClInclude Include="vm_declarations.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="DiskManager.cpp" />
     <ClCompile Include="KernelProcess.cpp" />
     <ClCompile Include="KernelSystem.cpp" />
     <ClCompile Include="Process.cpp" />

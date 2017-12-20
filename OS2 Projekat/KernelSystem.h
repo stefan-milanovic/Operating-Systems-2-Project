@@ -1,13 +1,14 @@
 #ifndef _kernelsystem_h_
 
+#define _kernelsystem_h_
+
 #include <vector>
 #include <iostream>
 #include <unordered_map>
 
 #include "vm_declarations.h"
 #include "part.h"
-
-#define _kernelsystem_h_
+#include "DiskManager.h"
 
 class Partition;
 class Process;
@@ -51,10 +52,7 @@ private:																		// private attributes
 	PhysicalAddress freeBlocksHead;												// head for the free physical blocks in memory
 	PageNum numberOfFreeBlocks;
 
-	ClusterNo clusterUsageVectorHead = 0;										// Indicates the first next free cluster.
-	ClusterNo clusterUsageVectorSize;
-	ClusterNo numberOfFreeClusters;
-	ClusterNo* clusterUsageVector;				// vector of free clusters. Index inside the vector points to the next free cluster number.
+	DiskManager* diskManager;													// encapsulates all of the operations with the partition
 
 	// ima listu svakog aktivnog procesa -> svaki aktivni proces ima svoj PMT1 i listu svojih segmenata,
 	// pri cemu se za svaki segment pamti svasta
@@ -76,11 +74,8 @@ private:																		// private attributes
 		bool wr;
 		bool ex;
 
-		bool refClockhand = 0;
+		bool refClockhand = 0;													// reference bits
 		bool refThrashing = 0;
-		bool copyOnWrite;
-
-		bool hasClusterReserved = 0;											// no cluster is initially reserved
 			
 		// bool firstAccess; // za createSegment?
 		PhysicalAddress block;													// remember pointer to a block of physical memory
