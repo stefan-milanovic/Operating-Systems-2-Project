@@ -50,7 +50,8 @@ private:																		// private attributes
 
 	PhysicalAddress freePMTSlotHead;											// head for the PMT1 blocks
 	PhysicalAddress freeBlocksHead;												// head for the free physical blocks in memory
-	PageNum numberOfFreeBlocks;
+
+	PageNum numberOfFreePMTSlots;												// counts the number of free PMT slots 
 
 	DiskManager* diskManager;													// encapsulates all of the operations with the partition
 
@@ -77,15 +78,17 @@ private:																		// private attributes
 		bool refClockhand = 0;													// reference bits
 		bool refThrashing = 0;
 			
-		// bool firstAccess; // za createSegment?
-		PhysicalAddress block;													// remember pointer to a block of physical memory
-		PhysicalAddress next;													// next in segment and next in the global politics swapping technique
+		bool hasCluster = 0;													// indicates whether a cluster has been reserved for this page
+		// bool hasClusterOnDisk; // za createSegment?
+		PhysicalAddress block = nullptr;										// remember pointer to a block of physical memory
+		PMT2Descriptor* next =  nullptr;										// next in segment and next in the global politics swapping technique
 		ClusterNo disk;															// which cluster holds this exact page
 
 		PMT2Descriptor() {}
 
-		void setRd() { rd = 1; }
-		void setWr() { wr = 1; }
+		void setV() { v = 1; } void resetV() { v = 0; }
+		void setD() { d = 1; } void resetD() { d = 0; }
+		void setRd() { rd = 1; } void setWr() { wr = 1; } 
 		void setRdWr() { rd = wr = 1; }
 		void setEx() { ex = 1; }
 		
@@ -95,6 +98,9 @@ private:																		// private attributes
 		void setRefThrashing() { refThrashing = 1; }
 		void resetRefThrashing() { refThrashing = 0; }
 
+		void setClusterBit() { hasCluster = 1; }
+
+		void setDisk(ClusterNo clusterNo) { disk = clusterNo; }
 	};
 
 	typedef PMT2Descriptor PMT2[PMT2Size];

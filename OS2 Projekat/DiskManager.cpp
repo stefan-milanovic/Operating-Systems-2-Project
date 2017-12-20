@@ -1,18 +1,35 @@
 #include "DiskManager.h"
 
 DiskManager::DiskManager(Partition* partition) {
-	this->partition = partition;										// assign the partition pointer
+	partition = partition;												// assign the partition pointer
+																		// create cluster usage vector
 
-	this->clusterUsageVector = new ClusterNo(this->clusterUsageVectorSize = partition->getNumOfClusters()); // create cluster usage vector
-	this->clusterUsageVectorHead = 0;
+	clusterUsageVector = new ClusterNo(this->clusterUsageVectorSize = partition->getNumOfClusters()); 
+	clusterUsageVectorHead = 0;
+
 	for (int i = 0; i < clusterUsageVectorSize - 1; i++) {				// initialise it
 		clusterUsageVector[i] = i + 1;
 	}
 	clusterUsageVector[clusterUsageVectorSize - 1] = -1;
-	this->numberOfFreeClusters = this->clusterUsageVectorSize;			// assign number of free clusters
+
+	numberOfFreeClusters = clusterUsageVectorSize;						// assign number of free clusters
 
 }
 
 DiskManager::~DiskManager() {
 	delete[] clusterUsageVector;
+}
+
+ClusterNo DiskManager::write(void* content) {
+
+	if (clusterUsageVector[clusterUsageVectorHead] == -1) return -1;	// exception -- no free clusters
+
+	ClusterNo chosenCluster = clusterUsageVectorHead;					// choose a free cluster and move the free cluster head
+	clusterUsageVectorHead = clusterUsageVector[clusterUsageVectorHead];
+
+	partition->writeCluster(chosenCluster, (char*)content);				// Write the content onto the partition.
+
+	numberOfFreeClusters--;												// decrease the free cluster counter
+
+	return chosenCluster;
 }

@@ -25,7 +25,7 @@ Status Process::loadSegment(VirtualAddress startAddress, PageNum segmentSize,
 }
 
 Status Process::deleteSegment(VirtualAddress startAddress) {
-	return pProcess->deleteSegment(startAddress); // check for inconsistencies, the start addr has to be the beginning of a block/segment
+	return pProcess->deleteSegment(startAddress); 
 }
 
 Status Process::pageFault(VirtualAddress address) {

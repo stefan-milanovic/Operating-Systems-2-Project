@@ -34,20 +34,18 @@ private:
 		
 		VirtualAddress startAddress;					// start address in virtual space
 		AccessType accessType;							// the access type for the segment that the process declared would use
-		unsigned length = 0;							// each segment's length (in blocks required)
-															
-														// PHYSICAL MEMORY INFO
-		bool continuous = true;							// continuous until a page of the segment has been swapped out or not enough room instantly
-		unsigned* pageLocations;						// used only if the segment isn't continuous anymore
+		PageNum length = 0;								// each segment's length (in blocks required)
+		KernelSystem::PMT2Descriptor* firstDescAddress;	// address of the first descriptor (from this point onwards for _length_ descriptors)
 
-		SegmentInfo(VirtualAddress startAddr, AccessType access, unsigned newLength) :
-			startAddress(startAddr), accessType(access), length(newLength), pageLocations(nullptr) {}
+		SegmentInfo(VirtualAddress startAddr, AccessType access, PageNum newLength, KernelSystem::PMT2Descriptor* descriptorAddress) :
+			startAddress(startAddr), accessType(access), length(newLength), firstDescAddress(descriptorAddress) {}
 
-		~SegmentInfo() { if (pageLocations) delete[] pageLocations; }
+		~SegmentInfo() {}
 	};
 
 	std::vector<SegmentInfo> segments;				// current segment list
 	ProcessId id;									// process id
+	KernelSystem* system;							// the system this process is being run on
 	KernelSystem::PMT1* PMT1;						// page map table pointer of the first level, set in system's createProcess()
 
 	friend class System;

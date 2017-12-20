@@ -19,10 +19,9 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 	this->freeBlocksHead = processVMSpace;
 	this->freePMTSlotHead = pmtSpace;
 
-
 	this->diskManager = new DiskManager(partition);						// create the manager for the partition
 
-	this->numberOfFreeBlocks = processVMSpaceSize;
+	this->numberOfFreePMTSlots = pmtSpaceSize;
 
 	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;	// initialise lists
 	for (int i = 0; i < (processVMSpaceSize <= pmtSpaceSize ? pmtSpaceSize : processVMSpaceSize); i++) {
@@ -60,12 +59,15 @@ Process* KernelSystem::createProcess() {
 
 	Process* newProcess = new Process(processIDGenerator++);
 
-	newProcess->pProcess->PMT1 = (PMT1*)freePMTSlotHead;					// assign a free PMT page
+	newProcess->pProcess->system = this;
+
+	newProcess->pProcess->PMT1 = (PMT1*)freePMTSlotHead;					// assign a free block to the process's PMT1
 	for (unsigned short i = 0; i < PMT1Size; i++) {							// initialise all of its pointers to nullptr
 		(*(newProcess->pProcess->PMT1))[i] = nullptr;
 	}
 
 	freePMTSlotHead = (PhysicalAddress)(*((unsigned*)freePMTSlotHead));		// move the pmt list head
+	numberOfFreePMTSlots--;													// decrease the free slots counter
 
 	// do other things if needed
 
@@ -93,7 +95,7 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 	if (pageDescriptor->v == 0)													// the page isn't loaded in memory -- return page fault
 		return PAGE_FAULT;
 	else {
-		switch (type) {															// check access flags
+		switch (type) {															// check access rights
 		case READ:
 			if (!pageDescriptor->rd) return TRAP;
 			break;
@@ -107,7 +109,7 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 			if (!pageDescriptor->ex) return TRAP;
 			break;
 		}
-		return OK;
+		return OK;																// page is in memory and the operation is allowed
 	}
 
 }
@@ -122,10 +124,10 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 			wordPart |= address & mask;
 		}
 		else if (i < wordPartBitLength + page2PartBitLength) {
-			page2Part |= address & mask;
+			page2Part |= address & mask >> wordPartBitLength;
 		}
 		else {
-			page1Part |= address & mask;
+			page1Part |= address & mask >> (wordPartBitLength + page2PartBitLength);
 		}
 		mask <<= 1;
 	}
