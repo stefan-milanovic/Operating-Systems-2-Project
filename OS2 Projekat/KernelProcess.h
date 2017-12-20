@@ -25,8 +25,14 @@ public:
 	PhysicalAddress getPhysicalAddress(VirtualAddress address);
 
 private:
+	struct SegmentInfo;
 
 	bool inconsistencyCheck(VirtualAddress startAddress, PageNum segmentSize);
+	bool inconsistentAddressCheck(VirtualAddress startAddress);
+
+	Status optimisedDeleteSegment(SegmentInfo* segment);// Deletes a certain segment, skips several checks for the user deleteSegment method.
+
+	void releaseMemoryAndDisk(SegmentInfo* segment);	// Releases everything reserved by the given segment. Used in the delete methods.
 
 private:
 		
@@ -45,7 +51,7 @@ private:
 
 	std::vector<SegmentInfo> segments;				// current segment list
 	ProcessId id;									// process id
-	KernelSystem* system;							// the system this process is being run on
+	KernelSystem* system;							// the system this process is being run on, set in system's createProcess()
 	KernelSystem::PMT1* PMT1;						// page map table pointer of the first level, set in system's createProcess()
 
 	friend class System;

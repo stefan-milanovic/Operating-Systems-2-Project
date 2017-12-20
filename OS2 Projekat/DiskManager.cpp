@@ -33,3 +33,11 @@ ClusterNo DiskManager::write(void* content) {
 
 	return chosenCluster;
 }
+
+void DiskManager::freeCluster(ClusterNo clusterNumber) {
+
+	clusterUsageVector[clusterNumber] = clusterUsageVectorHead;
+	clusterUsageVectorHead = clusterNumber;								// optimised for a physical hard disk because of the head positioning
+
+	numberOfFreeClusters++;
+}

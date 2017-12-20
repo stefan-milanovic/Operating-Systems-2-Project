@@ -79,7 +79,7 @@ private:																		// private attributes
 		bool refThrashing = 0;
 			
 		bool hasCluster = 0;													// indicates whether a cluster has been reserved for this page
-		// bool hasClusterOnDisk; // za createSegment?
+
 		PhysicalAddress block = nullptr;										// remember pointer to a block of physical memory
 		PMT2Descriptor* next =  nullptr;										// next in segment and next in the global politics swapping technique
 		ClusterNo disk;															// which cluster holds this exact page

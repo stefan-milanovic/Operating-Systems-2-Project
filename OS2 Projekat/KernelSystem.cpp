@@ -101,6 +101,7 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 			break;
 		case WRITE:
 			if (!pageDescriptor->wr) return TRAP;
+			pageDescriptor->setD();												// the page has been written in
 			break;
 		case READ_WRITE:
 			if (!pageDescriptor->rd || !pageDescriptor->wr) return TRAP;

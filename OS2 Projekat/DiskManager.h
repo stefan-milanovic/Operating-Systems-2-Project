@@ -16,6 +16,8 @@ public:
 
 	bool hasEnoughSpace(ClusterNo clustersNeeded) { return numberOfFreeClusters >= clustersNeeded; }
 
+	void freeCluster(ClusterNo clusterNumber);	// Returns a cluster to the free cluster pool (eg. when a process is deleted).
+
 private:
 
 	Partition* partition;						// Pointer to the partition.

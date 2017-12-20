@@ -1,4 +1,5 @@
 #include <vector>
+#include <iterator>
 #include <algorithm>
 
 #include "KernelSystem.h"
@@ -12,14 +13,22 @@ KernelProcess::KernelProcess(ProcessId pid) {
 }
 
 KernelProcess::~KernelProcess() {
-															// remove any leftover segments from memory and disk + remove from hash map of sys
+
+	while (segments.size() > 0) {							// remove any leftover segments from memory and/or disk
+		optimisedDeleteSegment(&(segments.back()));
+		segments.pop_back();
+	}
+
+	system->activeProcesses.erase(id);						// remove the process from the system's active process hash map
 }
 
 Status KernelProcess::createSegment(VirtualAddress startAddress, PageNum segmentSize,
 	AccessType flags) {
-		// check inconsistencies
+
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
+
+	return OK;
 }
 
 Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSize,
@@ -63,10 +72,9 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 		KernelSystem::PMT2* pmt2 = (*PMT1)[pmt1Entry];			     				// access the PMT2 pointer
 		if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), pmt1Entry)) {					
 			missingPMT2s.push_back(pmt1Entry);										// if that pmt2 table doesn't exist yet, add it to the miss list
+			if (missingPMT2s.size() > system->numberOfFreePMTSlots) return TRAP;	// surely insufficient number of slots in PMT memory
 		}
 	}
-
-	if (missingPMT2s.size() > system->numberOfFreePMTSlots) return TRAP;			// insufficient slots in PMT memory
 
 	PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
 	KernelSystem::PMT2Descriptor* firstDescriptor = nullptr;
@@ -123,12 +131,36 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 }
 
 Status KernelProcess::deleteSegment(VirtualAddress startAddress) {
-	 // check for inconsistencies, the start addr has to be the beginning of a block/segment
-	
+	if (inconsistentAddressCheck(startAddress)) return TRAP;						// check if squared into start of page
+
+	bool segmentFound = false;
+	int foundPosition = 0;
+		
+	SegmentInfo* segmentInfo;														// check if the start address is a start of a segment
+	for (auto segment = segments.begin(); segment != segments.end(); segment++, foundPosition++) {	
+
+		if (segment->startAddress > startAddress) return TRAP;						// address isn't at the start of any previous segment
+
+		if (segment->startAddress == startAddress) {
+			segmentFound = true;
+			segmentInfo = &(*segment);
+			break;
+		}
+	}
+
+	if (!segmentFound) return TRAP;													// address offshoots all segment start addresses
+
+	releaseMemoryAndDisk(segmentInfo);												// release memory and disk of the entire segment
+
+	segments.erase(segments.begin() + foundPosition);								// remove the segment from the segment vector
+
+	return OK;
 }
 
 Status KernelProcess::pageFault(VirtualAddress address) {
 	
+
+	return OK;
 }
 
 PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
@@ -151,16 +183,13 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 }
 
 
+
+
 // private methods
 
 bool KernelProcess::inconsistencyCheck(VirtualAddress startAddress, PageNum segmentSize) {
 
-	for (VirtualAddress mask = 1, int i = 0; i < 10; i++) {						// check if squared into start of page
-		if (startAddress & mask)
-			return true;														// at least 1 of the lowest 10 bits isn't zero
-		else
-			mask <<= 1;
-	}
+	if (inconsistentAddressCheck(startAddress)) return true;					// check if squared into start of page
 
 	// segments is sorted by startAddress
 	// check if there is any overlapping segment
@@ -176,4 +205,42 @@ bool KernelProcess::inconsistencyCheck(VirtualAddress startAddress, PageNum segm
 
 	return false;
 	// returns false if there is no inconsistency, true if the new segment would overlap with an existing one
+}
+
+bool KernelProcess::inconsistentAddressCheck(VirtualAddress startAddress) {
+	for (VirtualAddress mask = 1, int i = 0; i < 10; i++) {						// check if squared into start of page
+		if (startAddress & mask)
+			return true;														// at least 1 of the lowest 10 bits isn't zero
+		else
+			mask <<= 1;
+	}
+	return false;
+}
+
+Status KernelProcess::optimisedDeleteSegment(SegmentInfo* segment) {
+
+	releaseMemoryAndDisk(segment);													// release the memory and the disk of the entire segment
+	segments.pop_back();															// remove the last segment from the segment vector
+
+	return OK;
+}
+
+void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
+	// SEE WHAT TO DO WITH CLOCKHAND AND NEXT LINKING !!!!!!!!!!
+	KernelSystem::PMT2Descriptor* startDescriptor = segment->firstDescAddress;
+	KernelSystem::PMT2Descriptor* temp = startDescriptor;
+
+	for (PageNum i = 0; i < segment->length; i++, temp = temp->next) {			// for each page of the segment do
+
+		if (temp->v) {																// if the page is in memory, declare the block as free
+			unsigned* block = (unsigned*)temp->block;
+
+			*block = (unsigned)((char*)system->freeBlocksHead);
+			system->freeBlocksHead = block;
+		}
+
+		if (temp->hasCluster) {														// if the page is saved on disk, declare the cluster as free
+			system->diskManager->freeCluster(temp->disk);
+		}
+	}
 }
