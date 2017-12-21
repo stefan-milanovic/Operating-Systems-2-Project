@@ -1,4 +1,6 @@
 #include "DiskManager.h"
+#include "vm_declarations.h"
+#include <cstring>
 
 DiskManager::DiskManager(Partition* partition) {
 	partition = partition;												// assign the partition pointer
@@ -27,11 +29,25 @@ ClusterNo DiskManager::write(void* content) {
 	ClusterNo chosenCluster = clusterUsageVectorHead;					// choose a free cluster and move the free cluster head
 	clusterUsageVectorHead = clusterUsageVector[clusterUsageVectorHead];
 
-	partition->writeCluster(chosenCluster, (char*)content);				// Write the content onto the partition.
+	if (!partition->writeCluster(chosenCluster, (char*)content))		// Write the content onto the partition.
+		return -1;														// return -1 in case of error
 
 	numberOfFreeClusters--;												// decrease the free cluster counter
 
 	return chosenCluster;
+}
+
+bool DiskManager::read(PhysicalAddress block, ClusterNo cluster) {
+	char* buffer = new char[ClusterSize];
+
+	if (!partition->readCluster(cluster, buffer))
+		return false;													// read from partition was unsuccessful
+
+	memcpy(block, buffer, ClusterSize);									// copy contents from buffer into physical block memory
+
+	delete[] buffer;
+
+	return true;
 }
 
 void DiskManager::freeCluster(ClusterNo clusterNumber) {

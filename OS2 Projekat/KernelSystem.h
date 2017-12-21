@@ -48,6 +48,14 @@ private:																		// private attributes
 	struct PMT2Descriptor;
 	PMT2Descriptor* clockHand;													// clockhand for the second chance swapping algorithm
 
+	struct PMT2DescriptorCounter {
+		PhysicalAddress pmt2StartAddress;										// start address of the PMT2
+		unsigned short counter = 0;												// number of descriptors in the PMT2 with the inUse bit equal to 1
+
+		PMT2DescriptorCounter(PhysicalAddress startAddress) : pmt2StartAddress(startAddress) {}
+	};
+	std::unordered_map<unsigned, PMT2DescriptorCounter> activePMT2Counter;		// keeps track of the number of descriptors in the allocated PMT2 tables
+
 	PhysicalAddress freePMTSlotHead;											// head for the PMT1 blocks
 	PhysicalAddress freeBlocksHead;												// head for the free physical blocks in memory
 
@@ -55,10 +63,10 @@ private:																		// private attributes
 
 	DiskManager* diskManager;													// encapsulates all of the operations with the partition
 
-	// ima listu svakog aktivnog procesa -> svaki aktivni proces ima svoj PMT1 i listu svojih segmenata,
-	// pri cemu se za svaki segment pamti svasta
 
 																				// CONSTANTS
+
+
 	static const unsigned short usefulBitLength    = 24;
 	static const unsigned short page1PartBitLength =  8;						// lengths of parts of the virtual address (in bits)
 	static const unsigned short page2PartBitLength =  6;
@@ -66,6 +74,10 @@ private:																		// private attributes
 
 	static const unsigned short PMT1Size = 256;									// pmt1 and pmt2 sizes
 	static const unsigned short PMT2Size =  64;
+
+
+																				// MEMORY ORGANISATION
+
 
 	struct PMT2Descriptor {
 		char basicBits = 0;														// _/_/_/execute/write/read/dirty/valid bits
@@ -100,7 +112,12 @@ private:																		// private attributes
 		void setInUse() { advancedBits |= 0x01; } void resetInUse() { advancedBits &= 0xFE; }
 		bool getInUse() { return advancedBits & 0x01; }
 
+		void setBlock(PhysicalAddress newBlock) { block = newBlock; }
+		PhysicalAddress getBlock() { return block; }
+
 		void setDisk(ClusterNo clusterNo) { disk = clusterNo; }
+		ClusterNo getDisk() { return disk; }
+
 	};
 
 	typedef PMT2Descriptor PMT2[PMT2Size];
@@ -111,7 +128,19 @@ private:																		// private attributes
 
 private:
 
+	// DO SYNCHRONISATION
+
 	static PMT2Descriptor* getPageDescriptor(const KernelProcess* process, VirtualAddress address);
+
+	PhysicalAddress getSwappedBlock();											// performs the swapping algorithm and returns a block
+
+	void addDescriptorToClockhandList(PMT2Descriptor*);							// chains a descriptor into the clockhand list
+
+	PhysicalAddress getFreeBlock();												// retrieves a block from the free block list	
+	void setFreeBlock(PhysicalAddress block);									// places a now free block to the free block list
+
+	PhysicalAddress getFreePMTSlot();											// retrieves a free PMT1/PMT2 slot (or nullptr if none exist)
+	void freePMTSlot(PhysicalAddress slotAddress);								// places a now free PMT1/PMT2 slot to the free slot list
 
 };
 

@@ -19,6 +19,8 @@ KernelProcess::~KernelProcess() {
 		segments.pop_back();
 	}
 
+	system->freePMTSlot(PMT1);														// declare the PMT1 as free
+
 	system->activeProcesses.erase(id);												// remove the process from the system's active process hash map
 }
 
@@ -36,23 +38,22 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
-	if (!system->diskManager->hasEnoughSpace(segmentSize)) return TRAP;
+	if (!system->diskManager->hasEnoughSpace(segmentSize)) return TRAP;				// if the partition doesn't have enough space
 
 	// possibility to optimise this -- check it later
 
 	struct EntryCreationHelper {													// helper struct for transcation reasons
 		unsigned short pmt1Entry;													// entry in pmt1
 		unsigned short pmt2Entry;													// entry in pmt2
-		KernelSystem::PMT2Descriptor descriptor;									// this will be used if there is enough memory to store all pmt2s
 	};
 
 	std::vector<unsigned short> missingPMT2s;										// remember indices of PMT2 tables that need to be allocated
 	std::vector<EntryCreationHelper> entries;										// all pages that will be loaded
 
-	for (PageNum i = 0; i < segmentSize; i++) {										// create PMT2 descriptors
+	for (PageNum i = 0; i < segmentSize; i++) {										// document PMT2 descriptors
 		VirtualAddress blockVirtualAddress = startAddress + i * PAGE_SIZE;
 		EntryCreationHelper entry;
-		unsigned pmt1Entry = 0, pmt2Entry = 0;										// extract relevant parts of the address
+		unsigned short pmt1Entry = 0, pmt2Entry = 0;								// extract relevant parts of the address
 
 		for (VirtualAddress mask = 1 << KernelSystem::wordPartBitLength, unsigned i = KernelSystem::wordPartBitLength;
 			i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
@@ -78,15 +79,23 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 
 	PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
 	KernelSystem::PMT2Descriptor* firstDescriptor = nullptr;
-	for (auto entry = entries.begin(); entry != entries.end(); entry++) {
+
+	for (auto entry = entries.begin(); entry != entries.end(); entry++) {			// create all documented descriptors
 
 		KernelSystem::PMT2* pmt2 = (*(this->PMT1))[entry->pmt1Entry];
 
-		if (!pmt2) {																// if the pmt2 table doesn't exist, create it
-			pmt2 = (KernelSystem::PMT2*)system->freePMTSlotHead;					// assign a free block to the required PMT2
+		unsigned pageKey = concatenatePageParts(entry->pmt1Entry, entry->pmt2Entry);// key used to access the PMT2 descriptor counter hash table
 
-			system->freePMTSlotHead = (PhysicalAddress)(*((unsigned*)system->freePMTSlotHead));		// move the pmt list head
+		if (!pmt2) {																// if the PMT2 table doesn't exist, create it
+			pmt2 = (KernelSystem::PMT2*)system->getFreePMTSlot();
+			if (!pmt2) return TRAP;													// this exception should never happen
+
+			KernelSystem::PMT2DescriptorCounter newPMT2Counter(pmt2);				// add new PMT2 to the system's PMT2 descriptor counter
+			system->activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
+
 		}
+
+		system->activePMT2Counter[pageKey].counter++;								// a new descriptor is being added -- increase the counter
 
 		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];	// access the targetted descriptor
 		if (!pageOffsetCounter) firstDescriptor = pageDescriptor;
@@ -111,19 +120,9 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 		pageDescriptor->setDisk(system->diskManager->write(pageContent));			// the disk manager's write() returns the cluster number
 		pageDescriptor->setHasCluster();											// the page's location on the partition is known
 
-		if (!system->clockHand) {													// chain the descriptor in the clockhand list
-			system->clockHand = pageDescriptor;
-			pageDescriptor->next = pageDescriptor;
-		}
-		else {
-			pageDescriptor->next = system->clockHand->next;
-			system->clockHand->next = pageDescriptor;
-			system->clockHand = system->clockHand->next;
-		}
 	}
 
 	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
-
 	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [newSegmentInfo](const SegmentInfo& info) {
 		return newSegmentInfo.startAddress < info.startAddress;
 	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
@@ -162,6 +161,8 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 	
 	// returns trap if blocks are full but disk is full as well
 
+	// POSSIBLE OPTIMISATION: no cluster reservation beforehand, 8 pointers while clockhand search (4 for hasCluster == 0, 4 for hC == 1)
+
 	KernelSystem::PMT2Descriptor* pageDescriptor = KernelSystem::getPageDescriptor(this, address);
 	if (!pageDescriptor) {															// if there is no pmt2 for this address (aka random address)
 		return TRAP;
@@ -170,6 +171,23 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 	if (!pageDescriptor->getInUse()) {												// access of random descriptor, page is not part of any segment
 		return TRAP;
 	}
+
+	if (pageDescriptor->getV()) return OK;											// page is already loaded in memory
+
+	PhysicalAddress freeBlock = system->getFreeBlock();								// attempt to find a free block, function returns nullptr if none exist
+	if (!freeBlock)
+		freeBlock = system->getSwappedBlock();										// if a free block doesn't exist -- choose a block to swap out
+
+	if (pageDescriptor->getHasCluster()) {											// if the page has a cluster on disk, read the contents
+		if (!system->diskManager->read(freeBlock, pageDescriptor->getDisk()))
+			return TRAP;															// if the read was unsucessful return adequate status
+	}
+
+	pageDescriptor->setV();
+	pageDescriptor->setBlock(freeBlock);											// set the given block in the descriptor
+
+	system->addDescriptorToClockhandList(pageDescriptor);							// chain the descriptor into the clockhand list
+
 	return OK;
 }
 
@@ -237,20 +255,46 @@ Status KernelProcess::optimisedDeleteSegment(SegmentInfo* segment) {
 
 void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 	// SEE WHAT TO DO WITH CLOCKHAND AND NEXT LINKING !!!!!!!!!!
-	KernelSystem::PMT2Descriptor* startDescriptor = segment->firstDescAddress;
-	KernelSystem::PMT2Descriptor* temp = startDescriptor;
+	KernelSystem::PMT2Descriptor* temp = segment->firstDescAddress;
+	VirtualAddress tempAddress = segment->startAddress;
 
-	for (PageNum i = 0; i < segment->length; i++, temp = temp->next) {					// for each page of the segment do
+																						// for each page of the segment do
+	for (PageNum i = 0; i < segment->length; i++, temp = temp->next, tempAddress += PAGE_SIZE) {		
 
 		if (temp->getV()) {																// if the page is in memory, declare the block as free
-			unsigned* block = (unsigned*)temp->block;
-
-			*block = (unsigned)((char*)system->freeBlocksHead);
-			system->freeBlocksHead = block;
+			system->setFreeBlock(temp->block);
 		}
 
 		if (temp->getHasCluster()) {													// if the page is saved on disk, declare the cluster as free
 			system->diskManager->freeCluster(temp->disk);
 		}
+
+		temp->resetInUse();																// the page is not used anymore
+
+		unsigned short pmt1Entry = 0, pmt2Entry = 0;									// extract relevant parts of the address
+
+		for (VirtualAddress mask = 1 << KernelSystem::wordPartBitLength, unsigned i = KernelSystem::wordPartBitLength;
+			i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
+
+			if (i < KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength) {
+				pmt2Entry |= tempAddress & mask >> KernelSystem::wordPartBitLength;
+			}
+			else {
+				pmt1Entry |= tempAddress & mask >> (KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength);
+			}
+			mask <<= 1;
+		}
+
+		unsigned pageKey = concatenatePageParts(pmt1Entry, pmt2Entry);					// if this is the last descriptor in the pmt2, deallocate it
+
+		system->activePMT2Counter[pageKey].counter--;									// access the counter for the specific pmt2
+		if (system->activePMT2Counter[pageKey].counter == 0) {							// if the counter has reached 0, deallocate the pmt2
+			system->freePMTSlot(system->activePMT2Counter[pageKey].pmt2StartAddress);
+			system->activePMT2Counter.erase(pageKey);									// erase the pmt2 from the counter hash table
+		}
 	}
+}
+
+unsigned KernelProcess::concatenatePageParts(unsigned short page1, unsigned short page2) {
+	return (page1 << KernelSystem::page1PartBitLength) | page2;
 }

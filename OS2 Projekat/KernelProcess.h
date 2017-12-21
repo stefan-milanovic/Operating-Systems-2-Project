@@ -30,12 +30,16 @@ private:
 	bool inconsistencyCheck(VirtualAddress startAddress, PageNum segmentSize);
 	bool inconsistentAddressCheck(VirtualAddress startAddress);
 
-	Status optimisedDeleteSegment(SegmentInfo* segment);// Deletes a certain segment, skips several checks for the user deleteSegment method.
+	Status optimisedDeleteSegment(SegmentInfo* segment);// Deletes a segment and skips several checks present in the user deleteSegment() method.
 
 	void releaseMemoryAndDisk(SegmentInfo* segment);	// Releases everything reserved by the given segment. Used in the delete methods.
 
+	unsigned concatenatePageParts(unsigned short page1, unsigned short page2);
+
 private:
 		
+	// DO SYNCHRONISATION
+
 	struct SegmentInfo {								// info about each segment the process has allocated
 		
 		VirtualAddress startAddress;					// start address in virtual space

@@ -55,19 +55,23 @@ KernelSystem::~KernelSystem() {
 
 Process* KernelSystem::createProcess() {
 
-	if (freePMTSlotHead) return nullptr;									// no space for a new PMT1 at the moment
+	if (!numberOfFreePMTSlots) return nullptr;								// no space for a new PMT1 at the moment
 
 	Process* newProcess = new Process(processIDGenerator++);
 
 	newProcess->pProcess->system = this;
 
-	newProcess->pProcess->PMT1 = (PMT1*)freePMTSlotHead;					// assign a free block to the process's PMT1
+	newProcess->pProcess->PMT1 = (PMT1*)getFreePMTSlot();					// grab a free PMT slot for the PMT1
+	if (!newProcess->pProcess->PMT1) {
+		delete newProcess;
+		return nullptr;														// this exception should never occur
+	}
+
 	for (unsigned short i = 0; i < PMT1Size; i++) {							// initialise all of its pointers to nullptr
 		(*(newProcess->pProcess->PMT1))[i] = nullptr;
 	}
-
-	freePMTSlotHead = (PhysicalAddress)(*((unsigned*)freePMTSlotHead));		// move the pmt list head
-	numberOfFreePMTSlots--;													// decrease the free slots counter
+																			// add the new process to the hash map
+	activeProcesses.insert(std::pair<ProcessId, Process*>(processIDGenerator - 1, newProcess));	
 
 	// do other things if needed
 
@@ -101,7 +105,7 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 			break;
 		case WRITE:
 			if (!pageDescriptor->getWr()) return TRAP;
-			pageDescriptor->setD();												// the page has been written in
+			pageDescriptor->setD();												// indicate that the page is dirty
 			break;
 		case READ_WRITE:
 			if (!pageDescriptor->getRd() || !pageDescriptor->getWr()) return TRAP;
@@ -115,8 +119,14 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 
 }
 
+
+
+// private methods
+
+
+
 KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProcess* process, VirtualAddress address) {
-	unsigned page1Part = 0;														// extract parts of the virtual address	
+	unsigned page1Part = 0;													// extract parts of the virtual address	
 	unsigned page2Part = 0;
 	unsigned wordPart = 0;
 
@@ -139,4 +149,58 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 	if (!pmt2) return nullptr;
 	else return &(*pmt2)[page2Part];										// access the targetted descriptor
 
+}
+
+PhysicalAddress KernelSystem::getSwappedBlock() {							// this function always returns a block from the list
+
+
+}
+
+void KernelSystem::addDescriptorToClockhandList(PMT2Descriptor* pageDescriptor) {
+
+	if (!clockHand) {														// chain the descriptor in the clockhand list
+		clockHand = pageDescriptor;
+		pageDescriptor->next = pageDescriptor;
+	}
+	else {
+		pageDescriptor->next = clockHand->next;
+		clockHand->next = pageDescriptor;
+		clockHand = clockHand->next;
+	}
+}
+
+PhysicalAddress KernelSystem::getFreeBlock() {
+	if (!freeBlocksHead) return nullptr;
+
+	PhysicalAddress block = freeBlocksHead;									// retrieve the free block
+	freeBlocksHead = (PhysicalAddress)(*(unsigned*)(block));				// move the free blocks head onto the next free block in the list
+	
+	return block;
+}
+
+void KernelSystem::setFreeBlock(PhysicalAddress newFreeBlock) {
+	unsigned* block = (unsigned*)newFreeBlock;
+
+	*block = (unsigned)((char*)freeBlocksHead);								// chain the new block as the new first element of the list
+	freeBlocksHead = block;
+}
+
+PhysicalAddress KernelSystem::getFreePMTSlot() {
+	if (!numberOfFreePMTSlots) return nullptr;
+
+	PhysicalAddress freeSlot = freePMTSlotHead;								// assign a free block to the required PMT1/PMT2
+	freePMTSlotHead = (PhysicalAddress)(*((unsigned*)freePMTSlotHead));		// move the pmt list head
+
+	numberOfFreePMTSlots--;													// decrease the number of free slots
+
+	return freeSlot;
+}
+
+void KernelSystem::freePMTSlot(PhysicalAddress slotAddress) {
+	unsigned* slot = (unsigned*)slotAddress;
+
+	*slot = (unsigned)((char*)freePMTSlotHead);								// chain the new slot as the new first element of the list
+	freePMTSlotHead = slot;
+
+	numberOfFreePMTSlots++;													// increase number of free slots
 }
