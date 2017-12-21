@@ -153,7 +153,30 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 
 PhysicalAddress KernelSystem::getSwappedBlock() {							// this function always returns a block from the list
 
+	const unsigned short numberOfPointers = 4;								
+	PMT2Descriptor* candidates[numberOfPointers] = { nullptr };				// First descriptor candidate in each category
 
+	PMT2Descriptor* startingPoint = clockHand;
+
+	// check first descriptor
+	for (clockHand = clockHand->next; clockHand != startingPoint; clockHand = clockHand->next) {
+		// check all the rest
+	}
+
+	PMT2Descriptor* victim;
+	for (int i = 0; i < numberOfPointers; i++) {
+		if (candidates[i] != nullptr) {
+			victim = candidates[i];
+			break;
+		}
+	}
+
+	if (victim->getD()) {													// write the block to the disk if it's dirty
+		diskManager->writeToCluster(victim->getBlock(), victim->getDisk());
+	}
+
+	victim->resetV();														// the page is no longer in memory, set valid to zero
+	return victim->getBlock();												// return the address of the block the victim had
 }
 
 void KernelSystem::addDescriptorToClockhandList(PMT2Descriptor* pageDescriptor) {

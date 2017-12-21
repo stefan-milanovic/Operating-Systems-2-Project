@@ -37,7 +37,19 @@ ClusterNo DiskManager::write(void* content) {
 	return chosenCluster;
 }
 
+bool DiskManager::writeToCluster(void* content, ClusterNo cluster) {
+	if (cluster < 0 || cluster >= clusterUsageVectorSize) return false;
+
+	if (!partition->writeCluster(cluster, (char*)content))				// Write the content onto the partition.
+		return false;													// return false in case of error
+
+	return true;
+}
+
 bool DiskManager::read(PhysicalAddress block, ClusterNo cluster) {
+
+	if (cluster < 0 || cluster >= clusterUsageVectorSize) return false;
+
 	char* buffer = new char[ClusterSize];
 
 	if (!partition->readCluster(cluster, buffer))

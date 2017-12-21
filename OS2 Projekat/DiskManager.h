@@ -1,7 +1,7 @@
 #ifndef _diskmanager_h_
 
-
 #include "part.h"
+#include "vm_declarations.h"
 
 #define _diskmanager_h_
 
@@ -13,7 +13,10 @@ public:
 	~DiskManager();
 
 	ClusterNo write(void* content);				// Writes contents onto the partition and returns the number of the cluster they were written on.
+	bool writeToCluster(void* content, ClusterNo cluster);	
+
 	bool read(PhysicalAddress block, ClusterNo cluster);
+
 	bool hasEnoughSpace(ClusterNo clustersNeeded) { return numberOfFreeClusters >= clustersNeeded; }
 
 	void freeCluster(ClusterNo clusterNumber);	// Returns a cluster to the free cluster pool (eg. when a process is deleted).
