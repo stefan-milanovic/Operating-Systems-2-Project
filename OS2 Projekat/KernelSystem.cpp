@@ -161,6 +161,7 @@ PhysicalAddress KernelSystem::getSwappedBlock() {							// this function always 
 	// check first descriptor
 	for (clockHand = clockHand->next; clockHand != startingPoint; clockHand = clockHand->next) {
 		// check all the rest
+
 	}
 
 	PMT2Descriptor* victim;

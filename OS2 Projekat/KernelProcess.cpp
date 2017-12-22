@@ -211,7 +211,10 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 }
 
 
+void KernelProcess::blockIfThrashing() {
 
+
+}
 
 // private methods
 

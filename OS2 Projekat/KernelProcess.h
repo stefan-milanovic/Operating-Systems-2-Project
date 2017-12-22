@@ -24,6 +24,8 @@ public:
 	Status pageFault(VirtualAddress address);
 	PhysicalAddress getPhysicalAddress(VirtualAddress address);
 
+	void blockIfThrashing();
+
 private:
 	struct SegmentInfo;
 

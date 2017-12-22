@@ -35,3 +35,7 @@ Status Process::pageFault(VirtualAddress address) {
 PhysicalAddress Process::getPhysicalAddress(VirtualAddress address) {
 	return pProcess->getPhysicalAddress(address);
 }
+
+void Process::blockIfThrashing() {
+	return pProcess->blockIfThrashing();
+}
