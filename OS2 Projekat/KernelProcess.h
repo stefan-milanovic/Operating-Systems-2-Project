@@ -36,7 +36,9 @@ private:
 
 	void releaseMemoryAndDisk(SegmentInfo* segment);	// Releases everything reserved by the given segment. Used in the delete methods.
 
+
 	unsigned concatenatePageParts(unsigned short page1, unsigned short page2);
+	unsigned simpleHash(unsigned a, unsigned b) { return system->activePMT2Counter.max_size() * ((unsigned)(0.61803 * (a * b)) % 1); }
 
 private:
 		

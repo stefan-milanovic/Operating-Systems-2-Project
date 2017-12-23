@@ -46,7 +46,11 @@ private:																		// private attributes
 	std::unordered_map<ProcessId, Process*> activeProcesses;					// active process hash map
 
 	struct PMT2Descriptor;
-	PMT2Descriptor* clockHand;													// clockhand for the second chance swapping algorithm
+	struct ReferenceRegister {
+		unsigned value = 0;														// value of the reference register (32-bit history)
+		PMT2Descriptor* pageDescriptor = nullptr;								// descriptor for the page that currently holds this register's block
+	};
+	ReferenceRegister* referenceRegisters;										// dynamic array of reference registers 
 
 	struct PMT2DescriptorCounter {
 		PhysicalAddress pmt2StartAddress;										// start address of the PMT2
@@ -54,6 +58,7 @@ private:																		// private attributes
 
 		PMT2DescriptorCounter(PhysicalAddress startAddress) : pmt2StartAddress(startAddress) {}
 	};
+
 	std::unordered_map<unsigned, PMT2DescriptorCounter> activePMT2Counter;		// keeps track of the number of descriptors in the allocated PMT2 tables
 
 	PhysicalAddress freePMTSlotHead;											// head for the PMT1 blocks
@@ -81,7 +86,7 @@ private:																		// private attributes
 
 	struct PMT2Descriptor {
 		char basicBits = 0;														// _/_/_/execute/write/read/dirty/valid bits
-		char advancedBits = 0;													// _/_/_/_/refClockhand/refThrashing/hasCluster/inUse bits
+		char advancedBits = 0;													// _/_/_/_/referenced/refThrashing/hasCluster/inUse bits
 
 		// bool hasCluster = 0;													// indicates whether a cluster has been reserved for this page
 		// bool inUse = 0;														// indicates whether the descriptor is in use yet or not
@@ -97,11 +102,11 @@ private:																		// private attributes
 		void setRd() { basicBits |= 0x04; } bool getRd() { return basicBits & 0x04; }
 		void setWr() { basicBits |= 0x08; } bool getWr() { return basicBits & 0x08; }
 		void setRdWr() { basicBits |= 0x0C; } 
-		void setEx() { basicBits |= 0x0F; } bool getEx() { return basicBits & 0x0F; }
+		void setEx() { basicBits |= 0x10; } bool getEx() { return basicBits & 0x10; }
 		
 																				// advanced bit operations
-		void setRefClockhand() { advancedBits |= 0x08; } void resetRefClockhand() { advancedBits &= 0xF7; }
-		bool getRefClockhand() { return advancedBits & 0x08; }
+		void setReferenced() { advancedBits |= 0x08; } void resetReferenced() { advancedBits &= 0xF7; }
+		bool getReferenced() { return advancedBits & 0x08; }
 
 		void setRefThrashing() { advancedBits |= 0x04; } void resetRefThrashing() { advancedBits &= 0xFB; }
 		bool getRefThrashing() { return advancedBits & 0x04; }
@@ -133,8 +138,6 @@ private:
 	static PMT2Descriptor* getPageDescriptor(const KernelProcess* process, VirtualAddress address);
 
 	PhysicalAddress getSwappedBlock();											// performs the swapping algorithm and returns a block
-
-	void addDescriptorToClockhandList(PMT2Descriptor*);							// chains a descriptor into the clockhand list
 
 	PhysicalAddress getFreeBlock();												// retrieves a block from the free block list	
 	void setFreeBlock(PhysicalAddress block);									// places a now free block to the free block list

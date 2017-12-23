@@ -12,20 +12,21 @@
 KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpaceSize, 
 	PhysicalAddress pmtSpace, PageNum pmtSpaceSize, Partition* partition) {
 
-	this->processVMSpace = processVMSpace;								// initialise memory containing physical blocks
+	this->processVMSpace = processVMSpace;									// initialise memory containing physical blocks
 	this->processVMSpaceSize = processVMSpaceSize;
-
-	this->clockHand = nullptr;											// assign head pointers
-	this->freeBlocksHead = processVMSpace;
+	
+	this->freeBlocksHead = processVMSpace;									// assign head pointers
 	this->freePMTSlotHead = pmtSpace;
 
-	this->diskManager = new DiskManager(partition);						// create the manager for the partition
+	referenceRegisters = new ReferenceRegister[processVMSpaceSize];			// create reference registers
+
+	diskManager = new DiskManager(partition);								// create the manager for the partition
 
 	this->numberOfFreePMTSlots = pmtSpaceSize;
-
-	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;	// initialise lists
+																			// initialise lists
+	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;	
 	for (int i = 0; i < (processVMSpaceSize <= pmtSpaceSize ? pmtSpaceSize : processVMSpaceSize); i++) {
-		if (i < processVMSpaceSize) {												// block list
+		if (i < processVMSpaceSize) {										// block list
 			if (i == processVMSpaceSize - 1) {
 				*blocksTemp = 0;
 			}
@@ -35,7 +36,7 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 			}
 		}
 		if (i < pmtSpaceSize) {
-			if (i == pmtSpaceSize) {												// pmt list
+			if (i == pmtSpaceSize) {										// pmt list
 				*pmtTemp = 0;
 			}
 			else {
@@ -45,11 +46,12 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 		}
 	}
 
-	this->pmtSpace = pmtSpace;											// initialise memory for the page map tables
+	this->pmtSpace = pmtSpace;												// initialise memory for the page map tables
 	this->pmtSpaceSize = pmtSpaceSize;
 }
 
 KernelSystem::~KernelSystem() {
+	delete[] referenceRegisters;
 	delete diskManager;
 }
 
@@ -78,7 +80,20 @@ Process* KernelSystem::createProcess() {
 	return newProcess;
 }
 
-Time KernelSystem::periodicJob() {}
+Time KernelSystem::periodicJob() {											// shift reference bit into reference bits
+
+	for (PageNum i = 0; i < processVMSpaceSize; i++) {						// shift each reference bit into that block's register
+		if (referenceRegisters[i].pageDescriptor) {							// only if there is a page in that block slot
+			referenceRegisters[i].value >>= 1;
+			referenceRegisters[i].value |= referenceRegisters[i].pageDescriptor->getReferenced() << sizeof(unsigned) * 8;
+			if (referenceRegisters[i].pageDescriptor->getReferenced())
+				referenceRegisters[i].pageDescriptor->resetReferenced();
+		}
+	}
+
+	return 10;																// 10ms period
+
+}
 
 
 Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType type) {
@@ -87,25 +102,29 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 	
 	Process* wantedProcess = nullptr;
 	try {
-		wantedProcess = activeProcesses.at(pid);								// check for the key but don't insert if nonexistant 
-	}																			// (that is what unordered_map::operator[] would do)
+		wantedProcess = activeProcesses.at(pid);							// check for the key but don't insert if nonexistant 
+	}																		// (that is what unordered_map::operator[] would do)
 	catch (std::out_of_range noProcessWithPID) {
 		return TRAP;
 	}
 
 	PMT2Descriptor* pageDescriptor = getPageDescriptor(wantedProcess->pProcess, address);
-	if (!pageDescriptor) return PAGE_FAULT;										// if PMT2 isn't created
+	if (!pageDescriptor) return PAGE_FAULT;									// if PMT2 isn't created
 
-	if (!pageDescriptor->getV())												// the page isn't loaded in memory -- return page fault
+	if (!pageDescriptor->getInUse()) return TRAP;							// attempted access of address that doesn't belong to any segment
+
+	if (!pageDescriptor->getV())											// the page isn't loaded in memory -- return page fault
 		return PAGE_FAULT;
 	else {
-		switch (type) {															// check access rights
+		pageDescriptor->setReferenced();									// the page has been accessed in this period -- set the ref bit
+
+		switch (type) {														// check access rights
 		case READ:
 			if (!pageDescriptor->getRd()) return TRAP;
 			break;
 		case WRITE:
 			if (!pageDescriptor->getWr()) return TRAP;
-			pageDescriptor->setD();												// indicate that the page is dirty
+			pageDescriptor->setD();											// indicate that the page is dirty
 			break;
 		case READ_WRITE:
 			if (!pageDescriptor->getRd() || !pageDescriptor->getWr()) return TRAP;
@@ -114,7 +133,7 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 			if (!pageDescriptor->getEx()) return TRAP;
 			break;
 		}
-		return OK;																// page is in memory and the operation is allowed
+		return OK;															// page is in memory and the operation is allowed
 	}
 
 }
@@ -151,46 +170,37 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 
 }
 
-PhysicalAddress KernelSystem::getSwappedBlock() {							// this function always returns a block from the list
+PhysicalAddress KernelSystem::getSwappedBlock() {							// this function always returns a block from the list, nullptr if no space on disk
 
-	const unsigned short numberOfPointers = 4;								
-	PMT2Descriptor* candidates[numberOfPointers] = { nullptr };				// First descriptor candidate in each category
+	PMT2Descriptor* victimThatHasCluster, *victimHasNoCluster;
+	PageNum victimHasIndex = -1, victimHasNoIndex = -1;						// only compared if there is no room for a new write to the disk
 
-	PMT2Descriptor* startingPoint = clockHand;
-
-	// check first descriptor
-	for (clockHand = clockHand->next; clockHand != startingPoint; clockHand = clockHand->next) {
-		// check all the rest
-
-	}
-
-	PMT2Descriptor* victim;
-	for (int i = 0; i < numberOfPointers; i++) {
-		if (candidates[i] != nullptr) {
-			victim = candidates[i];
-			break;
+	PMT2Descriptor* victim = referenceRegisters[0].pageDescriptor;
+	PageNum victimIndex = 0;
+	for (PageNum i = 1; i < processVMSpaceSize; i++) {						// find victim
+		if (referenceRegisters[i].value < referenceRegisters[victimIndex].value) {
+			victimIndex = i;
+			victim = referenceRegisters[i].pageDescriptor;
 		}
 	}
 
+	// return nullptr if no space for write on disk (in case of CreateSegment)
+
+	referenceRegisters[victimIndex].value = 0;								// reset history bits to zero
+
 	if (victim->getD()) {													// write the block to the disk if it's dirty
-		diskManager->writeToCluster(victim->getBlock(), victim->getDisk());
+		if (victim->getHasCluster())										// if the page already has a reserved cluster on the disk, write contents there
+			diskManager->writeToCluster(victim->getBlock(), victim->getDisk());
+		else {																// if not, attempt to find an empty slot
+			victim->setDisk(diskManager->write(victim->block));				
+			if (victim->getDisk() == -1)
+				return nullptr;												// no room on the disk or error while writing
+		}
+		victim->resetD();
 	}
 
 	victim->resetV();														// the page is no longer in memory, set valid to zero
 	return victim->getBlock();												// return the address of the block the victim had
-}
-
-void KernelSystem::addDescriptorToClockhandList(PMT2Descriptor* pageDescriptor) {
-
-	if (!clockHand) {														// chain the descriptor in the clockhand list
-		clockHand = pageDescriptor;
-		pageDescriptor->next = pageDescriptor;
-	}
-	else {
-		pageDescriptor->next = clockHand->next;
-		clockHand->next = pageDescriptor;
-		clockHand = clockHand->next;
-	}
 }
 
 PhysicalAddress KernelSystem::getFreeBlock() {
