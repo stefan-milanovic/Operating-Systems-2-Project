@@ -136,6 +136,10 @@ private:
 	// DO SYNCHRONISATION
 
 	static PMT2Descriptor* getPageDescriptor(const KernelProcess* process, VirtualAddress address);
+	
+																				// returns address to first descriptor, nullptr if any errors occur
+	PMT2Descriptor* allocateDescriptors(KernelProcess* process, VirtualAddress startAddress, 
+										PageNum segmentSize, AccessType flags, bool load, void* content);
 
 	PhysicalAddress getSwappedBlock();											// performs the swapping algorithm and returns a block
 
@@ -145,6 +149,8 @@ private:
 	PhysicalAddress getFreePMTSlot();											// retrieves a free PMT1/PMT2 slot (or nullptr if none exist)
 	void freePMTSlot(PhysicalAddress slotAddress);								// places a now free PMT1/PMT2 slot to the free slot list
 
+
+	unsigned simpleHash(unsigned a, unsigned b) { return activePMT2Counter.max_size() * ((unsigned)(0.61803 * (a * b)) % 1); }
 };
 
 

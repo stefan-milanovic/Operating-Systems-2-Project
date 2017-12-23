@@ -29,6 +29,16 @@ Status KernelProcess::createSegment(VirtualAddress startAddress, PageNum segment
 
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
+	// no need to check here for disk space -- disk for a created segment is only reserved once a page with no disk cluster has to be swapped out
+
+	KernelSystem::PMT2Descriptor* firstDescriptor = system->allocateDescriptors(this, startAddress, segmentSize, flags, false, nullptr);
+
+	if (!firstDescriptor) return TRAP;
+
+	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
+	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [newSegmentInfo](const SegmentInfo& info) {
+		return newSegmentInfo.startAddress < info.startAddress;
+	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
 
 	return OK;
 }
@@ -42,92 +52,9 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 
 	// possibility to optimise this -- check it later
 
-	struct EntryCreationHelper {													// helper struct for transcation reasons
-		unsigned short pmt1Entry;													// entry in pmt1
-		unsigned short pmt2Entry;													// entry in pmt2
-	};
+	KernelSystem::PMT2Descriptor* firstDescriptor = system->allocateDescriptors(this, startAddress, segmentSize, flags, true, content);
 
-	std::vector<unsigned short> missingPMT2s;										// remember indices of PMT2 tables that need to be allocated
-	std::vector<EntryCreationHelper> entries;										// all pages that will be loaded
-
-	for (PageNum i = 0; i < segmentSize; i++) {										// document PMT2 descriptors
-		VirtualAddress blockVirtualAddress = startAddress + i * PAGE_SIZE;
-		EntryCreationHelper entry;
-		unsigned short pmt1Entry = 0, pmt2Entry = 0;								// extract relevant parts of the address
-
-		for (VirtualAddress mask = 1 << KernelSystem::wordPartBitLength, unsigned i = KernelSystem::wordPartBitLength;
-			i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
-
-			if (i < KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength) {
-				pmt2Entry |= blockVirtualAddress & mask >> KernelSystem::wordPartBitLength;
-			}
-			else {
-				pmt1Entry |= blockVirtualAddress & mask >> (KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength);
-			}
-			mask <<= 1;
-		}
-
-		entry.pmt1Entry = pmt1Entry, entry.pmt2Entry = pmt2Entry;
-		entries.push_back(entry);
-
-		KernelSystem::PMT2* pmt2 = (*PMT1)[pmt1Entry];			     				// access the PMT2 pointer
-		if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), pmt1Entry)) {					
-			missingPMT2s.push_back(pmt1Entry);										// if that pmt2 table doesn't exist yet, add it to the miss list
-			if (missingPMT2s.size() > system->numberOfFreePMTSlots) return TRAP;	// surely insufficient number of slots in PMT memory
-		}
-	}
-
-	PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
-	KernelSystem::PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
-
-	for (auto entry = entries.begin(); entry != entries.end(); entry++) {			// create all documented descriptors
-
-		KernelSystem::PMT2* pmt2 = (*(this->PMT1))[entry->pmt1Entry];
-
-		unsigned pageKey = simpleHash(id, entry->pmt1Entry);						// key used to access the PMT2 descriptor counter hash table
-
-		if (!pmt2) {																// if the PMT2 table doesn't exist, create it
-			pmt2 = (KernelSystem::PMT2*)system->getFreePMTSlot();
-			if (!pmt2) return TRAP;													// this exception should never happen
-
-			KernelSystem::PMT2DescriptorCounter newPMT2Counter(pmt2);				// add new PMT2 to the system's PMT2 descriptor counter
-			system->activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
-
-		}
-
-		system->activePMT2Counter[pageKey].counter++;								// a new descriptor is being added to this PMT2 -- increase the counter
-
-		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];	// access the targetted descriptor
-		if (!pageOffsetCounter) {													// chain it
-			firstDescriptor = pageDescriptor;
-			temp = firstDescriptor;
-		}
-		else {
-			temp->next = pageDescriptor;
-			temp = temp->next;
-		}
-
-		pageDescriptor->setInUse();													// set that the descriptor is now in use
-		switch (flags) {															// set access rights
-		case READ:
-			pageDescriptor->setRd();
-			break;
-		case WRITE:
-			pageDescriptor->setWr();
-			break;
-		case READ_WRITE:
-			pageDescriptor->setRdWr();
-			break;
-		case EXECUTE:
-			pageDescriptor->setEx();
-			break;
-		}
-
-		void* pageContent = (void*)((char*)content + pageOffsetCounter++ * PAGE_SIZE);
-		pageDescriptor->setDisk(system->diskManager->write(pageContent));			// the disk manager's write() returns the cluster number
-		pageDescriptor->setHasCluster();											// the page's location on the partition is known
-
-	}
+	if (!firstDescriptor) return TRAP;												// error in descriptor allocation (eg. not enough room for all PMT2's)
 
 	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
 	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [newSegmentInfo](const SegmentInfo& info) {
@@ -299,7 +226,7 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 			mask <<= 1;
 		}
 
-		unsigned pageKey = simpleHash(id, pmt1Entry);									// find key
+		unsigned pageKey = system->simpleHash(id, pmt1Entry);							// find key
 
 		system->activePMT2Counter[pageKey].counter--;									// access the counter for the specific pmt2
 		if (system->activePMT2Counter[pageKey].counter == 0) {							// if the counter has reached 0, deallocate the pmt2

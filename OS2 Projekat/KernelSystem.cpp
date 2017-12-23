@@ -170,6 +170,103 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 
 }
 
+KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* process, VirtualAddress startAddress,
+										PageNum segmentSize, AccessType flags, bool load, void* content) {
+
+	struct EntryCreationHelper {													// helper struct for transcation reasons
+		unsigned short pmt1Entry;													// entry in pmt1
+		unsigned short pmt2Entry;													// entry in pmt2
+	};
+
+	std::vector<unsigned short> missingPMT2s;										// remember indices of PMT2 tables that need to be allocated
+	std::vector<EntryCreationHelper> entries;										// contains info of all pages that will be loaded
+
+	for (PageNum i = 0; i < segmentSize; i++) {										// document PMT2 descriptors
+		VirtualAddress blockVirtualAddress = startAddress + i * PAGE_SIZE;
+		EntryCreationHelper entry;
+		unsigned short pmt1Entry = 0, pmt2Entry = 0;								// extract relevant parts of the address
+
+		for (VirtualAddress mask = 1 << KernelSystem::wordPartBitLength, unsigned i = KernelSystem::wordPartBitLength;
+			i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
+
+			if (i < KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength) {
+				pmt2Entry |= blockVirtualAddress & mask >> KernelSystem::wordPartBitLength;
+			}
+			else {
+				pmt1Entry |= blockVirtualAddress & mask >> (KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength);
+			}
+			mask <<= 1;
+		}
+
+		entry.pmt1Entry = pmt1Entry, entry.pmt2Entry = pmt2Entry;
+		entries.push_back(entry);
+
+		PMT2* pmt2 = (*(process->PMT1))[pmt1Entry];			     					// access the PMT2 pointer
+		if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), pmt1Entry)) {
+			missingPMT2s.push_back(pmt1Entry);										// if that pmt2 table doesn't exist yet, add it to the miss list
+			if (missingPMT2s.size() > numberOfFreePMTSlots) return nullptr;			// surely insufficient number of slots in PMT memory
+		}
+	}
+
+	PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
+	KernelSystem::PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
+
+	for (auto entry = entries.begin(); entry != entries.end(); entry++) {			// create all documented descriptors
+
+		KernelSystem::PMT2* pmt2 = (*(process->PMT1))[entry->pmt1Entry];
+
+		unsigned pageKey = simpleHash(process->id, entry->pmt1Entry);				// key used to access the PMT2 descriptor counter hash table
+
+		if (!pmt2) {																// if the PMT2 table doesn't exist, create it
+			pmt2 = (KernelSystem::PMT2*)getFreePMTSlot();
+			if (!pmt2) return nullptr;												// this exception should never happen (number of free PMT slots was checked in previous loop)
+
+			PMT2DescriptorCounter newPMT2Counter(pmt2);								// add new PMT2 to the system's PMT2 descriptor counter
+			activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
+
+		}
+
+		activePMT2Counter[pageKey].counter++;										// a new descriptor is being added to this PMT2 -- increase the counter
+
+		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];	// access the targetted descriptor
+		if (!pageOffsetCounter) {													// chain it
+			firstDescriptor = pageDescriptor;
+			temp = firstDescriptor;
+		}
+		else {
+			temp->next = pageDescriptor;
+			temp = temp->next;
+		}
+
+		pageDescriptor->setInUse();													// set that the descriptor is now in use
+		switch (flags) {															// set access rights
+		case READ:
+			pageDescriptor->setRd();
+			break;
+		case WRITE:
+			pageDescriptor->setWr();
+			break;
+		case READ_WRITE:
+			pageDescriptor->setRdWr();
+			break;
+		case EXECUTE:
+			pageDescriptor->setEx();
+			break;
+		}
+
+		if (load) {																	// if loadSegment() is being called, load content
+			void* pageContent = (void*)((char*)content + pageOffsetCounter++ * PAGE_SIZE);
+			pageDescriptor->setDisk(diskManager->write(pageContent));				// the disk manager's write() returns the cluster number
+			pageDescriptor->setHasCluster();										// the page's location on the partition is known
+		}
+		else {
+			pageDescriptor->resetHasCluster();										// the page does not have a reserved cluster on the disk yet
+		}
+	}
+
+	return firstDescriptor;															// operation was successful -- return address of the first descriptor
+}
+
 PhysicalAddress KernelSystem::getSwappedBlock() {							// this function always returns a block from the list, nullptr if no space on disk
 
 	PMT2Descriptor* victimThatHasCluster, *victimHasNoCluster;
