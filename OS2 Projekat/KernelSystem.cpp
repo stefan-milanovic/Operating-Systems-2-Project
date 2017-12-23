@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <iterator>
+#include <mutex>
 
 #include "DiskManager.h"
 #include "KernelSystem.h"
@@ -57,6 +58,8 @@ KernelSystem::~KernelSystem() {
 
 Process* KernelSystem::createProcess() {
 
+	mutex.lock();
+
 	if (!numberOfFreePMTSlots) return nullptr;								// no space for a new PMT1 at the moment
 
 	Process* newProcess = new Process(processIDGenerator++);
@@ -76,6 +79,8 @@ Process* KernelSystem::createProcess() {
 	activeProcesses.insert(std::pair<ProcessId, Process*>(processIDGenerator - 1, newProcess));	
 
 	// do other things if needed
+
+	mutex.unlock();
 
 	return newProcess;
 }
@@ -99,40 +104,46 @@ Time KernelSystem::periodicJob() {											// shift reference bit into referen
 Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType type) {
 
 	// Page1 - 8 bits ; Page2 - 6 bits ; Word - 10 bits
-	
+
+	mutex.lock();
+
 	Process* wantedProcess = nullptr;
 	try {
 		wantedProcess = activeProcesses.at(pid);							// check for the key but don't insert if nonexistant 
 	}																		// (that is what unordered_map::operator[] would do)
 	catch (std::out_of_range noProcessWithPID) {
+		mutex.unlock();
 		return TRAP;
 	}
 
 	PMT2Descriptor* pageDescriptor = getPageDescriptor(wantedProcess->pProcess, address);
-	if (!pageDescriptor) return PAGE_FAULT;									// if PMT2 isn't created
+	if (!pageDescriptor) { mutex.unlock(); return PAGE_FAULT; }				// if PMT2 isn't created
 
-	if (!pageDescriptor->getInUse()) return TRAP;							// attempted access of address that doesn't belong to any segment
+	if (!pageDescriptor->getInUse()) { mutex.unlock(); return TRAP; }		// attempted access of address that doesn't belong to any segment
 
-	if (!pageDescriptor->getV())											// the page isn't loaded in memory -- return page fault
+	if (!pageDescriptor->getV()) {											// the page isn't loaded in memory -- return page fault
+		mutex.unlock();
 		return PAGE_FAULT;
+	}
 	else {
 		pageDescriptor->setReferenced();									// the page has been accessed in this period -- set the ref bit
 
 		switch (type) {														// check access rights
 		case READ:
-			if (!pageDescriptor->getRd()) return TRAP;
+			if (!pageDescriptor->getRd()) { mutex.unlock(); return TRAP; }
 			break;
 		case WRITE:
-			if (!pageDescriptor->getWr()) return TRAP;
+			if (!pageDescriptor->getWr()) { mutex.unlock(); return TRAP; }
 			pageDescriptor->setD();											// indicate that the page is dirty
 			break;
 		case READ_WRITE:
-			if (!pageDescriptor->getRd() || !pageDescriptor->getWr()) return TRAP;
+			if (!pageDescriptor->getRd() || !pageDescriptor->getWr()) { mutex.unlock(); return TRAP; }
 			break;
 		case EXECUTE:
-			if (!pageDescriptor->getEx()) return TRAP;
+			if (!pageDescriptor->getEx()) { mutex.unlock(); return TRAP; }
 			break;
 		}
+		mutex.unlock();
 		return OK;															// page is in memory and the operation is allowed
 	}
 
@@ -161,9 +172,13 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 		}
 		mask <<= 1;
 	}
+	
+	mutex.lock();
 
 	PMT1* pmt1 = process->PMT1;												// access the PMT1 of the process
 	PMT2* pmt2 = (*pmt1)[page1Part];										// attempt access to a PMT2 pointer
+	
+	mutex.unlock();
 
 	if (!pmt2) return nullptr;
 	else return &(*pmt2)[page2Part];										// access the targetted descriptor
@@ -172,6 +187,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 
 KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* process, VirtualAddress startAddress,
 										PageNum segmentSize, AccessType flags, bool load, void* content) {
+
+	mutex.lock();
 
 	struct EntryCreationHelper {													// helper struct for transcation reasons
 		unsigned short pmt1Entry;													// entry in pmt1
@@ -204,7 +221,10 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 		PMT2* pmt2 = (*(process->PMT1))[pmt1Entry];			     					// access the PMT2 pointer
 		if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), pmt1Entry)) {
 			missingPMT2s.push_back(pmt1Entry);										// if that pmt2 table doesn't exist yet, add it to the miss list
-			if (missingPMT2s.size() > numberOfFreePMTSlots) return nullptr;			// surely insufficient number of slots in PMT memory
+			if (missingPMT2s.size() > numberOfFreePMTSlots) {
+				mutex.unlock();
+				return nullptr;														// surely insufficient number of slots in PMT memory
+			}
 		}
 	}
 
@@ -219,7 +239,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 
 		if (!pmt2) {																// if the PMT2 table doesn't exist, create it
 			pmt2 = (KernelSystem::PMT2*)getFreePMTSlot();
-			if (!pmt2) return nullptr;												// this exception should never happen (number of free PMT slots was checked in previous loop)
+			if (!pmt2) { mutex.unlock(); return nullptr; }							// this exception should never happen (number of free PMT slots was checked in previous loop)
 
 			PMT2DescriptorCounter newPMT2Counter(pmt2);								// add new PMT2 to the system's PMT2 descriptor counter
 			activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
@@ -264,74 +284,147 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 		}
 	}
 
+	mutex.unlock();
 	return firstDescriptor;															// operation was successful -- return address of the first descriptor
 }
 
-PhysicalAddress KernelSystem::getSwappedBlock() {							// this function always returns a block from the list, nullptr if no space on disk
+PhysicalAddress KernelSystem::getSwappedBlock() {									// this function always returns a block from the list, nullptr if no space on disk
 
-	PMT2Descriptor* victimThatHasCluster, *victimHasNoCluster;
-	PageNum victimHasIndex = -1, victimHasNoIndex = -1;						// only compared if there is no room for a new write to the disk
+	mutex.lock();
+
+	PMT2Descriptor* victimHasCluster, *victimHasNoCluster;
+	PageNum victimHasClusterIndex = -1, victimHasNoClusterIndex = -1;				// only compared if there is no room for a new write to the disk
 
 	PMT2Descriptor* victim = referenceRegisters[0].pageDescriptor;
 	PageNum victimIndex = 0;
-	for (PageNum i = 1; i < processVMSpaceSize; i++) {						// find victim
-		if (referenceRegisters[i].value < referenceRegisters[victimIndex].value) {
-			victimIndex = i;
-			victim = referenceRegisters[i].pageDescriptor;
+
+	for (PageNum i = 1; i < processVMSpaceSize; i++) {								// find victim
+		if (referenceRegisters[i].pageDescriptor->getHasCluster()) {
+			if (victimHasClusterIndex == -1) {
+				victimHasCluster = referenceRegisters[i].pageDescriptor;
+				victimHasClusterIndex = i;
+			}
+			else {
+				if (referenceRegisters[i].value < referenceRegisters[victimHasClusterIndex].value) {
+					victimHasCluster = referenceRegisters[i].pageDescriptor;
+					victimHasClusterIndex = i;
+				}
+			}
+		}
+		else {
+			if (victimHasNoClusterIndex == -1) {
+				victimHasNoCluster = referenceRegisters[i].pageDescriptor;
+				victimHasNoClusterIndex = i;
+			}
+			else {
+				if (referenceRegisters[i].value < referenceRegisters[victimHasNoClusterIndex].value) {
+					victimHasNoCluster = referenceRegisters[i].pageDescriptor;
+					victimHasNoClusterIndex = i;
+				}
+			}
 		}
 	}
 
-	// return nullptr if no space for write on disk (in case of CreateSegment)
+	if (victimHasClusterIndex == -1 && victimHasNoClusterIndex == -1) {				
+		mutex.unlock();																// this should never be entered
+		return nullptr;
+	}
+	else {
+		if (!(victimHasClusterIndex != -1 && victimHasNoClusterIndex != -1)) {		// only pages of one type or the other are in memory
+			if (victimHasClusterIndex != -1) {
+				victim = victimHasCluster;
+				victimIndex = victimHasClusterIndex;
+			}
+			else {
+				victim = victimHasNoCluster;
+				victimIndex = victimHasNoClusterIndex;
+			}
+		}
+		else {																		// find minimal, reverse only if there is no room on disk at the moment
+			if (referenceRegisters[victimHasClusterIndex].value <= referenceRegisters[victimHasNoClusterIndex].value) {
+				victim = victimHasCluster;
+				victimIndex = victimHasClusterIndex;
+			}
+			else {
+				if (diskManager->hasEnoughSpace(1)) {								// if there's room on the disk, allow the minimal to reserve it
+					victim = victimHasNoCluster;
+					victimIndex = victimHasNoClusterIndex;
+				}
+				else {																// otherwise swap minimal with no disk for first minimal with disk
+					victim = victimHasCluster;
+					victimIndex = victimHasClusterIndex;
+				}
 
-	referenceRegisters[victimIndex].value = 0;								// reset history bits to zero
+			}
+		}
+	}
 
-	if (victim->getD()) {													// write the block to the disk if it's dirty
-		if (victim->getHasCluster())										// if the page already has a reserved cluster on the disk, write contents there
+	referenceRegisters[victimIndex].value = 0;										// reset history bits of block to zero
+
+	if (victim->getD()) {															// write the block to the disk if it's dirty (always true for never-before-written-to-disk createSegment() pages)
+		if (victim->getHasCluster())												// if the page already has a reserved cluster on the disk, write contents there
 			diskManager->writeToCluster(victim->getBlock(), victim->getDisk());
-		else {																// if not, attempt to find an empty slot
+		else {																		// if not, attempt to find an empty slot
 			victim->setDisk(diskManager->write(victim->block));				
-			if (victim->getDisk() == -1)
-				return nullptr;												// no room on the disk or error while writing
+			if (victim->getDisk() == -1) {
+				mutex.unlock();
+				return nullptr;														// no room on the disk or error while writing
+			}
+			victim->setHasCluster();												// the victim now has a cluster on the disk
 		}
 		victim->resetD();
 	}
 
-	victim->resetV();														// the page is no longer in memory, set valid to zero
-	return victim->getBlock();												// return the address of the block the victim had
+	victim->resetReferenced();														// if it was referenced, it might not immediately be on the next load
+	victim->resetV();																// the page is no longer in memory, set valid to zero
+
+	mutex.unlock();
+
+	return victim->getBlock();														// return the address of the block the victim had
 }
 
 PhysicalAddress KernelSystem::getFreeBlock() {
+
+	mutex.lock();
+
 	if (!freeBlocksHead) return nullptr;
 
-	PhysicalAddress block = freeBlocksHead;									// retrieve the free block
-	freeBlocksHead = (PhysicalAddress)(*(unsigned*)(block));				// move the free blocks head onto the next free block in the list
+	PhysicalAddress block = freeBlocksHead;											// retrieve the free block
+	freeBlocksHead = (PhysicalAddress)(*(unsigned*)(block));						// move the free blocks head onto the next free block in the list
 	
+	mutex.unlock();
 	return block;
 }
 
 void KernelSystem::setFreeBlock(PhysicalAddress newFreeBlock) {
+	mutex.lock();
 	unsigned* block = (unsigned*)newFreeBlock;
 
-	*block = (unsigned)((char*)freeBlocksHead);								// chain the new block as the new first element of the list
+	*block = (unsigned)((char*)freeBlocksHead);										// chain the new block as the new first element of the list
 	freeBlocksHead = block;
+	mutex.unlock();
 }
 
 PhysicalAddress KernelSystem::getFreePMTSlot() {
+	mutex.lock();
 	if (!numberOfFreePMTSlots) return nullptr;
 
-	PhysicalAddress freeSlot = freePMTSlotHead;								// assign a free block to the required PMT1/PMT2
-	freePMTSlotHead = (PhysicalAddress)(*((unsigned*)freePMTSlotHead));		// move the pmt list head
+	PhysicalAddress freeSlot = freePMTSlotHead;										// assign a free block to the required PMT1/PMT2
+	freePMTSlotHead = (PhysicalAddress)(*((unsigned*)freePMTSlotHead));				// move the pmt list head
 
-	numberOfFreePMTSlots--;													// decrease the number of free slots
+	numberOfFreePMTSlots--;															// decrease the number of free slots
 
+	mutex.unlock();
 	return freeSlot;
 }
 
 void KernelSystem::freePMTSlot(PhysicalAddress slotAddress) {
+	mutex.lock();
 	unsigned* slot = (unsigned*)slotAddress;
 
-	*slot = (unsigned)((char*)freePMTSlotHead);								// chain the new slot as the new first element of the list
+	*slot = (unsigned)((char*)freePMTSlotHead);										// chain the new slot as the new first element of the list
 	freePMTSlotHead = slot;
 
-	numberOfFreePMTSlots++;													// increase number of free slots
+	numberOfFreePMTSlots++;															// increase number of free slots
+	mutex.unlock();
 }

@@ -97,7 +97,7 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 
 	// POSSIBLE OPTIMISATION: no cluster reservation beforehand for createSegment
 
-	KernelSystem::PMT2Descriptor* pageDescriptor = KernelSystem::getPageDescriptor(this, address);
+	KernelSystem::PMT2Descriptor* pageDescriptor = system->getPageDescriptor(this, address);
 	if (!pageDescriptor) {															// if there is no pmt2 for this address (aka random address)
 		return TRAP;
 	}
@@ -131,7 +131,7 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 
 PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 
-	KernelSystem::PMT2Descriptor* pageDescriptor = KernelSystem::getPageDescriptor(this, address);
+	KernelSystem::PMT2Descriptor* pageDescriptor = system->getPageDescriptor(this, address);
 
 	if (!pageDescriptor) return 0;															// pmt2 not allocated
 
@@ -196,6 +196,8 @@ Status KernelProcess::optimisedDeleteSegment(SegmentInfo* segment) {
 
 void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 
+	system->mutex.lock();
+
 	KernelSystem::PMT2Descriptor* temp = segment->firstDescAddress;
 	VirtualAddress tempAddress = segment->startAddress;
 
@@ -234,6 +236,8 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 			system->activePMT2Counter.erase(pageKey);									// erase the pmt2 from the counter hash table
 		}
 	}
+
+	system->mutex.unlock();
 }
 
 unsigned KernelProcess::concatenatePageParts(unsigned short page1, unsigned short page2) {

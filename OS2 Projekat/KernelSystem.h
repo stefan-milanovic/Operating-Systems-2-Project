@@ -4,6 +4,7 @@
 
 #include <vector>
 #include <iostream>
+#include <mutex>
 #include <unordered_map>
 
 #include "vm_declarations.h"
@@ -128,6 +129,8 @@ private:																		// private attributes
 	typedef PMT2Descriptor PMT2[PMT2Size];
 	typedef PMT2* PMT1[PMT1Size];
 
+	std::mutex mutex;															// a mutex for synchronisation
+
 	friend class Process;
 	friend class KernelProcess;
 
@@ -135,7 +138,7 @@ private:
 
 	// DO SYNCHRONISATION
 
-	static PMT2Descriptor* getPageDescriptor(const KernelProcess* process, VirtualAddress address);
+	PMT2Descriptor* getPageDescriptor(const KernelProcess* process, VirtualAddress address);
 	
 																				// returns address to first descriptor, nullptr if any errors occur
 	PMT2Descriptor* allocateDescriptors(KernelProcess* process, VirtualAddress startAddress, 
