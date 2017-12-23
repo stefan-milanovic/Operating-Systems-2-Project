@@ -3,6 +3,7 @@
 #define _kernelprocess_h_
 
 #include <vector>
+#include "KernelSystem.h"
 #include "vm_declarations.h"
 
 class KernelProcess {
@@ -55,6 +56,8 @@ private:
 
 		~SegmentInfo() {}
 	};
+
+	static bool compare(const SegmentInfo&, const SegmentInfo&);
 
 	std::vector<SegmentInfo> segments;					// current segment list
 	ProcessId id;										// process id

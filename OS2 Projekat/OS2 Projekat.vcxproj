@@ -24,15 +24,22 @@
     <ClInclude Include="KernelSystem.h" />
     <ClInclude Include="part.h" />
     <ClInclude Include="Process.h" />
+    <ClInclude Include="ProcessTest.h" />
+    <ClInclude Include="RandomNumberGenerator.h" />
     <ClInclude Include="System.h" />
+    <ClInclude Include="SystemTest.h" />
     <ClInclude Include="vm_declarations.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DiskManager.cpp" />
     <ClCompile Include="KernelProcess.cpp" />
     <ClCompile Include="KernelSystem.cpp" />
+    <ClCompile Include="main.cpp" />
     <ClCompile Include="Process.cpp" />
+    <ClCompile Include="ProcessTest.cpp" />
+    <ClCompile Include="RandomNumberGenerator.cpp" />
     <ClCompile Include="System.cpp" />
+    <ClCompile Include="SystemTest.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Library Include="..\..\..\..\..\..\..\ETF\Materijali\OS2\Projekat\part\part.lib" />

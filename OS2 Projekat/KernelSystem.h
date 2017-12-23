@@ -57,6 +57,7 @@ private:																		// private attributes
 		PhysicalAddress pmt2StartAddress;										// start address of the PMT2
 		unsigned short counter = 0;												// number of descriptors in the PMT2 with the inUse bit equal to 1
 
+		PMT2DescriptorCounter() {}
 		PMT2DescriptorCounter(PhysicalAddress startAddress) : pmt2StartAddress(startAddress) {}
 	};
 
@@ -84,7 +85,6 @@ private:																		// private attributes
 
 																				// MEMORY ORGANISATION
 
-
 	struct PMT2Descriptor {
 		char basicBits = 0;														// _/_/_/execute/write/read/dirty/valid bits
 		char advancedBits = 0;													// _/_/_/_/referenced/refThrashing/hasCluster/inUse bits
@@ -98,25 +98,25 @@ private:																		// private attributes
 
 		PMT2Descriptor() {}
 																				// basic bit operations
-		void setV() { basicBits |= 0x01; } void resetV() { basicBits &= 0xFE; } bool getV() { return basicBits & 0x01; }
-		void setD() { basicBits |= 0x02; } void resetD() { basicBits &= 0xFD; } bool getD() { return basicBits & 0x02; }
-		void setRd() { basicBits |= 0x04; } bool getRd() { return basicBits & 0x04; }
-		void setWr() { basicBits |= 0x08; } bool getWr() { return basicBits & 0x08; }
+		void setV() { basicBits |= 0x01; } void resetV() { basicBits &= 0xFE; } bool getV() { return (basicBits & 0x01) ? true : false; }
+		void setD() { basicBits |= 0x02; } void resetD() { basicBits &= 0xFD; } bool getD() { return (basicBits & 0x02) ? true : false; }
+		void setRd() { basicBits |= 0x04; } bool getRd() { return (basicBits & 0x04) ? true : false; }
+		void setWr() { basicBits |= 0x08; } bool getWr() { return (basicBits & 0x08) ? true : false; }
 		void setRdWr() { basicBits |= 0x0C; } 
-		void setEx() { basicBits |= 0x10; } bool getEx() { return basicBits & 0x10; }
+		void setEx() { basicBits |= 0x10; } bool getEx() { return (basicBits & 0x10) ? true : false; }
 		
 																				// advanced bit operations
 		void setReferenced() { advancedBits |= 0x08; } void resetReferenced() { advancedBits &= 0xF7; }
-		bool getReferenced() { return advancedBits & 0x08; }
+		bool getReferenced() { return (advancedBits & 0x08) ? true : false; }
 
 		void setRefThrashing() { advancedBits |= 0x04; } void resetRefThrashing() { advancedBits &= 0xFB; }
-		bool getRefThrashing() { return advancedBits & 0x04; }
+		bool getRefThrashing() { return (advancedBits & 0x04) ? true : false; }
 
 		void setHasCluster() { advancedBits |= 0x02; } void resetHasCluster() { advancedBits &= 0xFD; }
-		bool getHasCluster() { return advancedBits & 0x02; }
+		bool getHasCluster() { return (advancedBits & 0x02) ? true : false; }
 
 		void setInUse() { advancedBits |= 0x01; } void resetInUse() { advancedBits &= 0xFE; }
-		bool getInUse() { return advancedBits & 0x01; }
+		bool getInUse() { return (advancedBits & 0x01) ? true : false; }
 
 		void setBlock(PhysicalAddress newBlock) { block = newBlock; }
 		PhysicalAddress getBlock() { return block; }

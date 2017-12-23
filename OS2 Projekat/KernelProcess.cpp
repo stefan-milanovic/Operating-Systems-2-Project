@@ -36,10 +36,13 @@ Status KernelProcess::createSegment(VirtualAddress startAddress, PageNum segment
 	if (!firstDescriptor) return TRAP;
 
 	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
-	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [newSegmentInfo](const SegmentInfo& info) {
-		return newSegmentInfo.startAddress < info.startAddress;
-	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
 
+	
+	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, []
+	(const SegmentInfo& seg1, SegmentInfo& seg2) {
+		return seg1.startAddress < seg2.startAddress;
+	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
+	
 	return OK;
 }
 
@@ -139,8 +142,10 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 
 	PhysicalAddress pageBase = pageDescriptor->block;										// extract base of page;
 	unsigned long word = 0;
+
+	VirtualAddress mask = 1;
 																							// extract word from the virtual address
-	for (VirtualAddress mask = 1, unsigned short i = 0; i < KernelSystem::wordPartBitLength; i++) {
+	for (unsigned short i = 0; i < KernelSystem::wordPartBitLength; i++) {
 		word |= address & mask;
 		mask <<= 1;
 	}
@@ -177,7 +182,8 @@ bool KernelProcess::inconsistencyCheck(VirtualAddress startAddress, PageNum segm
 }
 
 bool KernelProcess::inconsistentAddressCheck(VirtualAddress startAddress) {
-	for (VirtualAddress mask = 1, int i = 0; i < 10; i++) {						// check if squared into start of page
+	VirtualAddress mask = 1;
+	for (int i = 0; i < 10; i++) {												// check if squared into start of page
 		if (startAddress & mask)
 			return true;														// at least 1 of the lowest 10 bits isn't zero
 		else
@@ -216,8 +222,8 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 
 		unsigned short pmt1Entry = 0, pmt2Entry = 0;									// extract relevant parts of the address
 
-		for (VirtualAddress mask = 1 << KernelSystem::wordPartBitLength, unsigned i = KernelSystem::wordPartBitLength;
-			i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
+		VirtualAddress mask = 1 << KernelSystem::wordPartBitLength;
+		for (unsigned i = KernelSystem::wordPartBitLength; i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
 
 			if (i < KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength) {
 				pmt2Entry |= tempAddress & mask >> KernelSystem::wordPartBitLength;

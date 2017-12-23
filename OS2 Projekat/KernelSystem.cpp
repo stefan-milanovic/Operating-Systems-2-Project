@@ -26,7 +26,7 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 	this->numberOfFreePMTSlots = pmtSpaceSize;
 																			// initialise lists
 	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;	
-	for (int i = 0; i < (processVMSpaceSize <= pmtSpaceSize ? pmtSpaceSize : processVMSpaceSize); i++) {
+	for (PageNum i = 0; i < (processVMSpaceSize <= pmtSpaceSize ? pmtSpaceSize : processVMSpaceSize); i++) {
 		if (i < processVMSpaceSize) {										// block list
 			if (i == processVMSpaceSize - 1) {
 				*blocksTemp = 0;
@@ -90,7 +90,7 @@ Time KernelSystem::periodicJob() {											// shift reference bit into referen
 	for (PageNum i = 0; i < processVMSpaceSize; i++) {						// shift each reference bit into that block's register
 		if (referenceRegisters[i].pageDescriptor) {							// only if there is a page in that block slot
 			referenceRegisters[i].value >>= 1;
-			referenceRegisters[i].value |= referenceRegisters[i].pageDescriptor->getReferenced() << sizeof(unsigned) * 8;
+			referenceRegisters[i].value |= (unsigned long long)(referenceRegisters[i].pageDescriptor->getReferenced() ? 1U : 0U) << sizeof(unsigned) * 8;
 			if (referenceRegisters[i].pageDescriptor->getReferenced())
 				referenceRegisters[i].pageDescriptor->resetReferenced();
 		}
@@ -160,7 +160,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 	unsigned page2Part = 0;
 	unsigned wordPart = 0;
 
-	for (VirtualAddress mask = 1, unsigned i = 0; i < usefulBitLength; i++) {
+	VirtualAddress mask = 1;
+	for (unsigned short i = 0; i < usefulBitLength; i++) {
 		if (i < wordPartBitLength) {
 			wordPart |= address & mask;
 		}
@@ -203,8 +204,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 		EntryCreationHelper entry;
 		unsigned short pmt1Entry = 0, pmt2Entry = 0;								// extract relevant parts of the address
 
-		for (VirtualAddress mask = 1 << KernelSystem::wordPartBitLength, unsigned i = KernelSystem::wordPartBitLength;
-			i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
+		VirtualAddress mask = 1 << KernelSystem::wordPartBitLength;
+		for (unsigned i = KernelSystem::wordPartBitLength; i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
 
 			if (i < KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength) {
 				pmt2Entry |= blockVirtualAddress & mask >> KernelSystem::wordPartBitLength;

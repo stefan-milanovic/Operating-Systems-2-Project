@@ -16,7 +16,7 @@ Process* System::createProcess() {
 
 Time System::periodicJob() {
 	// uncomment if necessary
-	// return pSystem->periodicJob();
+	return pSystem->periodicJob();
 }
 
 
