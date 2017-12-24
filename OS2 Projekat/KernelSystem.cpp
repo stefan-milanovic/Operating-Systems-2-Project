@@ -40,7 +40,7 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpa
 			}
 		}
 		if (i < pmtSpaceSize) {
-			if (i == pmtSpaceSize - 1) {										// pmt list
+			if (i == pmtSpaceSize - 1) {									// PMT slot list
 				*pmtTemp = 0;
 			}
 			else {
@@ -50,8 +50,6 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpa
 		}
 	}
 
-	this->pmtSpace = pmtSpace;												// initialise memory for the page map tables
-	this->pmtSpaceSize = pmtSpaceSize;
 }
 
 KernelSystem::~KernelSystem() {

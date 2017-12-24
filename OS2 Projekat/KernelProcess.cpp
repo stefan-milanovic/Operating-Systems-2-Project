@@ -52,7 +52,8 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
-	if (!system->diskManager->hasEnoughSpace(segmentSize)) return TRAP;				// if the partition doesn't have enough space
+	if (!system->diskManager->hasEnoughSpace(segmentSize)) 
+		return TRAP;				// if the partition doesn't have enough space
 
 	// possibility to optimise this -- check it later
 
@@ -99,8 +100,6 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 	
 	// returns trap if blocks are full but disk is full as well and no space to save
 
-	// POSSIBLE OPTIMISATION: no cluster reservation beforehand for createSegment
-
 	KernelSystem::PMT2Descriptor* pageDescriptor = system->getPageDescriptor(this, address);
 	if (!pageDescriptor) {															// if there is no pmt2 for this address (aka random address)
 		return TRAP;
@@ -119,8 +118,8 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 	if (!freeBlock) return TRAP;													// in case of createSegment: if no space on disk do not allow swap
 
 	if (pageDescriptor->getHasCluster()) {											// if the page has a cluster on disk, read the contents
-		if (!system->diskManager->read(freeBlock, pageDescriptor->getDisk()))
-			return TRAP;															// if the read was unsucessful return adequate status
+	if (!system->diskManager->read(freeBlock, pageDescriptor->getDisk()))
+		return TRAP;																// if the read was unsucessful return adequate status
 	}
 
 
@@ -146,6 +145,7 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 
 	word = KernelSystem::extractWordPart(address);
 
+	// std::cout << "VA: " << address << " => PA: " << (unsigned long)pageBase + word << std::endl;
 	
 	return (PhysicalAddress)((unsigned long)(pageBase) + word);				
 }
