@@ -3,7 +3,7 @@
 #include "ProcessTest.h"
 #include "System.h"
 
-#define POWER_OF_NUMBER_OF_INSTRUCTIONS (15)
+#define POWER_OF_NUMBER_OF_INSTRUCTIONS (5)
 
 ProcessTest::ProcessTest(System &system, SystemTest &systemTest_) : systemTest(systemTest_), finished(false) {
 	process = system.createProcess();
@@ -145,6 +145,9 @@ void ProcessTest::run() {
 				std::cout << "Instruction in process " << process->getProcessId() << " failed.\n";
 				std::cout << "Terminating process\n";
 				throw std::exception();
+			}
+			else {
+				std::cout << "Instruction in process " << process->getProcessId() << " successful.\n";
 			}
 		}
 	}

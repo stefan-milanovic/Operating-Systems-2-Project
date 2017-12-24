@@ -1,15 +1,18 @@
-#include "DiskManager.h"
-#include "vm_declarations.h"
+#include <iostream>
 #include <cstring>
 
-DiskManager::DiskManager(Partition* partition) {
-	partition = partition;												// assign the partition pointer
+#include "DiskManager.h"
+#include "vm_declarations.h"
+
+DiskManager::DiskManager(Partition* partition_) {
+	partition = partition_;												// assign the partition pointer
 																		// create cluster usage vector
 
-	clusterUsageVector = new ClusterNo(this->clusterUsageVectorSize = partition->getNumOfClusters()); 
+	clusterUsageVectorSize = partition->getNumOfClusters();
+	clusterUsageVector = new ClusterNo[clusterUsageVectorSize];
 	clusterUsageVectorHead = 0;
 
-	for (int i = 0; i < clusterUsageVectorSize - 1; i++) {				// initialise it
+	for (ClusterNo i = 0; i < clusterUsageVectorSize - 1; i++) {		// initialise it
 		clusterUsageVector[i] = i + 1;
 	}
 	clusterUsageVector[clusterUsageVectorSize - 1] = -1;

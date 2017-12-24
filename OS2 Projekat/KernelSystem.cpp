@@ -10,18 +10,21 @@
 #include "part.h"
 #include "vm_declarations.h"
 
-KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpaceSize, 
-	PhysicalAddress pmtSpace, PageNum pmtSpaceSize, Partition* partition) {
+KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpaceSize_, 
+	PhysicalAddress pmtSpace_, PageNum pmtSpaceSize_, Partition* partition_) {
 
-	this->processVMSpace = processVMSpace;									// initialise memory containing physical blocks
-	this->processVMSpaceSize = processVMSpaceSize;
+	processVMSpace = processVMSpace_;										// initialise info about physical blocks
+	processVMSpaceSize = processVMSpaceSize_;
 	
-	this->freeBlocksHead = processVMSpace;									// assign head pointers
-	this->freePMTSlotHead = pmtSpace;
+	pmtSpace = pmtSpace_;													// initialise info about PMT blocks 
+	pmtSpaceSize = pmtSpaceSize_;
+
+	freeBlocksHead = processVMSpace_;										// assign head pointers
+	freePMTSlotHead = pmtSpace_;
 
 	referenceRegisters = new ReferenceRegister[processVMSpaceSize];			// create reference registers
 
-	diskManager = new DiskManager(partition);								// create the manager for the partition
+	diskManager = new DiskManager(partition_);								// create the manager for the partition
 
 	this->numberOfFreePMTSlots = pmtSpaceSize;
 																			// initialise lists
@@ -37,7 +40,7 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace, PageNum processVMSpac
 			}
 		}
 		if (i < pmtSpaceSize) {
-			if (i == pmtSpaceSize) {										// pmt list
+			if (i == pmtSpaceSize - 1) {										// pmt list
 				*pmtTemp = 0;
 			}
 			else {
@@ -90,7 +93,7 @@ Time KernelSystem::periodicJob() {											// shift reference bit into referen
 	for (PageNum i = 0; i < processVMSpaceSize; i++) {						// shift each reference bit into that block's register
 		if (referenceRegisters[i].pageDescriptor) {							// only if there is a page in that block slot
 			referenceRegisters[i].value >>= 1;
-			referenceRegisters[i].value |= (unsigned long long)(referenceRegisters[i].pageDescriptor->getReferenced() ? 1U : 0U) << sizeof(unsigned) * 8;
+			referenceRegisters[i].value |= (referenceRegisters[i].pageDescriptor->getReferenced() ? 1U : 0U) << (sizeof(unsigned) * 8 - 1);
 			if (referenceRegisters[i].pageDescriptor->getReferenced())
 				referenceRegisters[i].pageDescriptor->resetReferenced();
 		}
@@ -158,28 +161,12 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProcess* process, VirtualAddress address) {
 	unsigned page1Part = 0;													// extract parts of the virtual address	
 	unsigned page2Part = 0;
-	unsigned wordPart = 0;
 
-	VirtualAddress mask = 1;
-	for (unsigned short i = 0; i < usefulBitLength; i++) {
-		if (i < wordPartBitLength) {
-			wordPart |= address & mask;
-		}
-		else if (i < wordPartBitLength + page2PartBitLength) {
-			page2Part |= address & mask >> wordPartBitLength;
-		}
-		else {
-			page1Part |= address & mask >> (wordPartBitLength + page2PartBitLength);
-		}
-		mask <<= 1;
-	}
-	
-	mutex.lock();
+	page1Part = KernelSystem::extractPage1Part(address);
+	page2Part = KernelSystem::extractPage2Part(address);
 
 	PMT1* pmt1 = process->PMT1;												// access the PMT1 of the process
 	PMT2* pmt2 = (*pmt1)[page1Part];										// attempt access to a PMT2 pointer
-	
-	mutex.unlock();
 
 	if (!pmt2) return nullptr;
 	else return &(*pmt2)[page2Part];										// access the targetted descriptor
@@ -201,27 +188,16 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 
 	for (PageNum i = 0; i < segmentSize; i++) {										// document PMT2 descriptors
 		VirtualAddress blockVirtualAddress = startAddress + i * PAGE_SIZE;
-		EntryCreationHelper entry;
-		unsigned short pmt1Entry = 0, pmt2Entry = 0;								// extract relevant parts of the address
+		EntryCreationHelper entry;													// extract relevant parts of the address
 
-		VirtualAddress mask = 1 << KernelSystem::wordPartBitLength;
-		for (unsigned i = KernelSystem::wordPartBitLength; i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
+		entry.pmt1Entry = KernelSystem::extractPage1Part(blockVirtualAddress);
+		entry.pmt2Entry = KernelSystem::extractPage2Part(blockVirtualAddress);
 
-			if (i < KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength) {
-				pmt2Entry |= blockVirtualAddress & mask >> KernelSystem::wordPartBitLength;
-			}
-			else {
-				pmt1Entry |= blockVirtualAddress & mask >> (KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength);
-			}
-			mask <<= 1;
-		}
-
-		entry.pmt1Entry = pmt1Entry, entry.pmt2Entry = pmt2Entry;
 		entries.push_back(entry);
 
-		PMT2* pmt2 = (*(process->PMT1))[pmt1Entry];			     					// access the PMT2 pointer
-		if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), pmt1Entry)) {
-			missingPMT2s.push_back(pmt1Entry);										// if that pmt2 table doesn't exist yet, add it to the miss list
+		PMT2* pmt2 = (*(process->PMT1))[entry.pmt1Entry];			     			// access the PMT2 pointer
+		if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), entry.pmt1Entry)) {
+			missingPMT2s.push_back(entry.pmt1Entry);								// if that pmt2 table doesn't exist yet, add it to the miss list
 			if (missingPMT2s.size() > numberOfFreePMTSlots) {
 				mutex.unlock();
 				return nullptr;														// surely insufficient number of slots in PMT memory
@@ -239,7 +215,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 		unsigned pageKey = simpleHash(process->id, entry->pmt1Entry);				// key used to access the PMT2 descriptor counter hash table
 
 		if (!pmt2) {																// if the PMT2 table doesn't exist, create it
-			pmt2 = (KernelSystem::PMT2*)getFreePMTSlot();
+			pmt2 = (*(process->PMT1))[entry->pmt1Entry] = (KernelSystem::PMT2*)getFreePMTSlot();
+			initialisePMT2(pmt2);
 			if (!pmt2) { mutex.unlock(); return nullptr; }							// this exception should never happen (number of free PMT slots was checked in previous loop)
 
 			PMT2DescriptorCounter newPMT2Counter(pmt2);								// add new PMT2 to the system's PMT2 descriptor counter
@@ -291,6 +268,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 
 PhysicalAddress KernelSystem::getSwappedBlock() {									// this function always returns a block from the list, nullptr if no space on disk
 
+	// needs synchronisation
 	mutex.lock();
 
 	PMT2Descriptor* victimHasCluster, *victimHasNoCluster;
@@ -386,6 +364,7 @@ PhysicalAddress KernelSystem::getSwappedBlock() {									// this function alway
 
 PhysicalAddress KernelSystem::getFreeBlock() {
 
+	// needs synchronisation
 	mutex.lock();
 
 	if (!freeBlocksHead) return nullptr;
@@ -398,6 +377,7 @@ PhysicalAddress KernelSystem::getFreeBlock() {
 }
 
 void KernelSystem::setFreeBlock(PhysicalAddress newFreeBlock) {
+	// needs synchronisation
 	mutex.lock();
 	unsigned* block = (unsigned*)newFreeBlock;
 
@@ -407,7 +387,7 @@ void KernelSystem::setFreeBlock(PhysicalAddress newFreeBlock) {
 }
 
 PhysicalAddress KernelSystem::getFreePMTSlot() {
-	mutex.lock();
+	// doesn't need synchronisation because it is already called from a function that has mutex.lock()
 	if (!numberOfFreePMTSlots) return nullptr;
 
 	PhysicalAddress freeSlot = freePMTSlotHead;										// assign a free block to the required PMT1/PMT2
@@ -415,11 +395,11 @@ PhysicalAddress KernelSystem::getFreePMTSlot() {
 
 	numberOfFreePMTSlots--;															// decrease the number of free slots
 
-	mutex.unlock();
 	return freeSlot;
 }
 
 void KernelSystem::freePMTSlot(PhysicalAddress slotAddress) {
+	// needs synchronisation
 	mutex.lock();
 	unsigned* slot = (unsigned*)slotAddress;
 
@@ -428,4 +408,27 @@ void KernelSystem::freePMTSlot(PhysicalAddress slotAddress) {
 
 	numberOfFreePMTSlots++;															// increase number of free slots
 	mutex.unlock();
+}
+
+void KernelSystem::initialisePMT2(PMT2* pmt2) {
+	for (unsigned short i = 0; i < PMT2Size; i++) {
+		(*pmt2)[i].basicBits = (*pmt2)[i].advancedBits = 0;
+		(*pmt2)[i].block = (*pmt2)[i].next = nullptr;
+	}
+}
+
+// 64bit 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000 0000
+// 24bit va												   xxxx xxxx xxxx xxxx xxxx xxxx
+// 8bit page 1 part										   pppp pppp
+// 6bit page 2 part													 pppp pp
+// 10bit word part                                                          pp pppp pppp
+
+unsigned short KernelSystem::extractPage1Part(VirtualAddress address) {
+	return (unsigned short)((address & 0x0000000000FF0000) >> 16);
+}
+unsigned short KernelSystem::extractPage2Part(VirtualAddress address) {
+	return (unsigned short)((address & 0x000000000000FC00) >> 10);
+}
+unsigned short KernelSystem::extractWordPart(VirtualAddress address) {
+	return (unsigned short)(address & 0x00000000000003FF);
 }

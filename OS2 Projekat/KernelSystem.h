@@ -35,13 +35,11 @@ public:
 
 private:																		// private attributes
 
-	PhysicalAddress processVMSpace;
+	PhysicalAddress processVMSpace;												// physical block memory
 	PageNum processVMSpaceSize;
 
-	PhysicalAddress pmtSpace;
+	PhysicalAddress pmtSpace;													// page map tables memory
 	PageNum pmtSpaceSize;
-
-	Partition* partition;
 
 	ProcessId processIDGenerator = 0;											// generates the ID for each new process
 	std::unordered_map<ProcessId, Process*> activeProcesses;					// active process hash map
@@ -152,8 +150,14 @@ private:
 	PhysicalAddress getFreePMTSlot();											// retrieves a free PMT1/PMT2 slot (or nullptr if none exist)
 	void freePMTSlot(PhysicalAddress slotAddress);								// places a now free PMT1/PMT2 slot to the free slot list
 
+	void initialisePMT2(PMT2* pmt2);											// called when a new PMT2 is created
 
-	unsigned simpleHash(unsigned a, unsigned b) { return activePMT2Counter.max_size() * ((unsigned)(0.61803 * (a * b)) % 1); }
+	static unsigned short extractPage1Part(VirtualAddress address);				// extraction methods for the virtual address parts
+	static unsigned short extractPage2Part(VirtualAddress address);
+	static unsigned short extractWordPart(VirtualAddress address);
+
+	unsigned simpleHash(unsigned a, unsigned b) { return ((a + 1) * b + 3) % activeProcesses.max_size(); }
+
 };
 
 

@@ -1,3 +1,4 @@
+#include <iostream>
 #include <vector>
 #include <iterator>
 #include <algorithm>
@@ -60,8 +61,8 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 	if (!firstDescriptor) return TRAP;												// error in descriptor allocation (eg. not enough room for all PMT2's)
 
 	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
-	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [newSegmentInfo](const SegmentInfo& info) {
-		return newSegmentInfo.startAddress < info.startAddress;
+	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [](const SegmentInfo& segment1,  const SegmentInfo& segment2) {
+		return segment1.startAddress < segment2.startAddress;
 	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
 
 	return OK;
@@ -143,13 +144,9 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 	PhysicalAddress pageBase = pageDescriptor->block;										// extract base of page;
 	unsigned long word = 0;
 
-	VirtualAddress mask = 1;
-																							// extract word from the virtual address
-	for (unsigned short i = 0; i < KernelSystem::wordPartBitLength; i++) {
-		word |= address & mask;
-		mask <<= 1;
-	}
+	word = KernelSystem::extractWordPart(address);
 
+	
 	return (PhysicalAddress)((unsigned long)(pageBase) + word);				
 }
 
@@ -222,17 +219,8 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 
 		unsigned short pmt1Entry = 0, pmt2Entry = 0;									// extract relevant parts of the address
 
-		VirtualAddress mask = 1 << KernelSystem::wordPartBitLength;
-		for (unsigned i = KernelSystem::wordPartBitLength; i < KernelSystem::usefulBitLength - KernelSystem::wordPartBitLength; i++) {
-
-			if (i < KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength) {
-				pmt2Entry |= tempAddress & mask >> KernelSystem::wordPartBitLength;
-			}
-			else {
-				pmt1Entry |= tempAddress & mask >> (KernelSystem::wordPartBitLength + KernelSystem::page2PartBitLength);
-			}
-			mask <<= 1;
-		}
+		pmt1Entry = KernelSystem::extractPage1Part(tempAddress);
+		pmt2Entry = KernelSystem::extractPage2Part(tempAddress);
 
 		unsigned pageKey = system->simpleHash(id, pmt1Entry);							// find key
 

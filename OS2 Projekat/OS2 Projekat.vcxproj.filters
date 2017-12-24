@@ -76,7 +76,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <Library Include="..\..\..\..\..\..\..\ETF\Materijali\OS2\Projekat\part\part.lib">
+    <Library Include="part.lib">
       <Filter>Source Files</Filter>
     </Library>
   </ItemGroup>

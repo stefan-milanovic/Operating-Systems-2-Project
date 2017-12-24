@@ -1,4 +1,5 @@
 #include <cassert>
+#include <iostream>
 #include "SystemTest.h"
 
 SystemTest::SystemTest(System &system_, void *processVMSpace, PageNum processVMSpaceSize)
@@ -12,6 +13,7 @@ Status SystemTest::doInstruction(Process &process,
 		AccessType accessType = std::get<1>(*iter);
 		VirtualAddress address = std::get<0>(*iter);
 		char expectedValue = std::get<2>(*iter);
+
 		switch (accessType) {
 		case READ:
 		case EXECUTE: {

@@ -23,12 +23,7 @@ PhysicalAddress alignPointer(PhysicalAddress address) {
 	return reinterpret_cast<PhysicalAddress> (addr);
 }
 
-int main() {
-	// std::cout << sizeof(KernelSystem::PMT2Descriptor) << std::endl;
-	return 0;
-}
 
-/*
 int main() {
 	Partition part("p1.ini");
 
@@ -59,7 +54,7 @@ int main() {
 
 		std::lock_guard<std::mutex> guard(systemTest.getGlobalMutex());
 
-		std::cout << "Doing periodic job\n";
+		// std::cout << "Doing periodic job\n";
 
 		std::this_thread::sleep_for(std::chrono::microseconds(PERIODIC_JOB_COST));
 
@@ -84,5 +79,3 @@ int main() {
 
 	std::cout << "Test finished\n";
 }
-
-*/

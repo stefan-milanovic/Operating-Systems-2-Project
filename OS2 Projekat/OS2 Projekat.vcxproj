@@ -42,7 +42,7 @@
     <ClCompile Include="SystemTest.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <Library Include="..\..\..\..\..\..\..\ETF\Materijali\OS2\Projekat\part\part.lib" />
+    <Library Include="part.lib" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{3E4B8DEE-7838-47F6-86E2-E3D82FB365D8}</ProjectGuid>
