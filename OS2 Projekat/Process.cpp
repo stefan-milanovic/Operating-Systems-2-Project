@@ -39,3 +39,19 @@ PhysicalAddress Process::getPhysicalAddress(VirtualAddress address) {
 void Process::blockIfThrashing() {
 	return pProcess->blockIfThrashing();
 }
+
+Process* Process::clone(ProcessId pid) {
+	return pProcess->clone(pid);
+}
+
+Status Process::createSharedSegment(VirtualAddress startAddress, PageNum segmentSize, const char* name, AccessType flags) {
+	return pProcess->createSharedSegment(startAddress, segmentSize, name, flags);
+}
+
+Status Process::disconnectSharedSegment(const char* name) {
+	return pProcess->disconnectSharedSegment(name);
+}
+
+Status Process::deleteSharedSegment(const char* name) {
+	return pProcess->deleteSharedSegment(name);
+}

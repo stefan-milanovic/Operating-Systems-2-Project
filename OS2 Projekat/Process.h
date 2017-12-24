@@ -3,6 +3,7 @@
 #define _process_h_
 
 #include "vm_declarations.h"
+
 class KernelProcess;
 class System;
 class KernelSystem;
@@ -27,6 +28,12 @@ public:
 	PhysicalAddress getPhysicalAddress(VirtualAddress address);
 
 	void blockIfThrashing();
+
+	Process* clone(ProcessId pid);
+ 	Status createSharedSegment(VirtualAddress startAddress,
+ 	PageNum segmentSize, const char* name, AccessType flags);
+ 	Status disconnectSharedSegment(const char* name);
+ 	Status deleteSharedSegment(const char* name);
 
 private:
 	KernelProcess *pProcess;

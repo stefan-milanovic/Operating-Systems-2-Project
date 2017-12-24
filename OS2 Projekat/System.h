@@ -26,6 +26,8 @@ public:
 	// Hardware job
 	Status access(ProcessId pid, VirtualAddress address, AccessType type);
 
+	Process* cloneProcess(ProcessId pid);
+
 private:
 	KernelSystem *pSystem;
 	friend class Process;

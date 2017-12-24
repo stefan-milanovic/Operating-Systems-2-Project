@@ -146,9 +146,6 @@ void ProcessTest::run() {
 				std::cout << "Terminating process\n";
 				throw std::exception();
 			}
-			else {
-				std::cout << "Instruction in process " << process->getProcessId() << " successful.\n";
-			}
 		}
 	}
 

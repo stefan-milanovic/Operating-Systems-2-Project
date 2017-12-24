@@ -150,7 +150,9 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 
 }
 
-
+Process* KernelSystem::cloneProcess(ProcessId pid) {
+	
+}
 
 // private methods
 

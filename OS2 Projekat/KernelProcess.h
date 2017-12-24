@@ -12,7 +12,7 @@ public:
 
 	KernelProcess(ProcessId pid);
 
-	~KernelProcess();	// check if needed
+	~KernelProcess();
 
 	ProcessId getProcessId() const { return id; }
 
@@ -26,6 +26,12 @@ public:
 	PhysicalAddress getPhysicalAddress(VirtualAddress address);
 
 	void blockIfThrashing();
+
+	Process* clone(ProcessId pid);
+ 	Status createSharedSegment(VirtualAddress startAddress,
+ 	PageNum segmentSize, const char* name, AccessType flags);
+ 	Status disconnectSharedSegment(const char* name);
+ 	Status deleteSharedSegment(const char* name);
 
 private:
 	struct SegmentInfo;
@@ -56,8 +62,6 @@ private:
 
 		~SegmentInfo() {}
 	};
-
-	static bool compare(const SegmentInfo&, const SegmentInfo&);
 
 	std::vector<SegmentInfo> segments;					// current segment list
 	ProcessId id;										// process id

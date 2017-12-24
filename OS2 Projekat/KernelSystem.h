@@ -32,6 +32,7 @@ public:
 	// Hardware job
 	Status access(ProcessId pid, VirtualAddress address, AccessType type);
 
+	Process* cloneProcess(ProcessId pid);
 
 private:																		// private attributes
 

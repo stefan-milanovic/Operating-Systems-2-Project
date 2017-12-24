@@ -156,6 +156,28 @@ void KernelProcess::blockIfThrashing() {
 
 }
 
+Process* KernelProcess::clone(ProcessId pid) {
+
+	Process* cloneProcess = nullptr;
+
+	return cloneProcess;
+}
+
+Status KernelProcess::createSharedSegment(VirtualAddress startAddress, PageNum segmentSize, const char* name, AccessType flags) {
+
+	return OK;
+}
+
+Status KernelProcess::disconnectSharedSegment(const char* name) {
+
+	return OK;
+}
+
+Status KernelProcess::deleteSharedSegment(const char* name) {
+
+	return OK;
+}
+
 // private methods
 
 bool KernelProcess::inconsistencyCheck(VirtualAddress startAddress, PageNum segmentSize) {

@@ -23,3 +23,7 @@ Time System::periodicJob() {
 Status System::access(ProcessId pid, VirtualAddress address, AccessType type) {
 	return pSystem->access(pid, address, type);
 }
+
+Process* System::cloneProcess(ProcessId pid) {
+	return pSystem->cloneProcess(pid);
+}
