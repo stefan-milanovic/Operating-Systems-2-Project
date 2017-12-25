@@ -60,7 +60,7 @@ private:																		// private attributes
 		PMT2DescriptorCounter(PhysicalAddress startAddress) : pmt2StartAddress(startAddress) {}
 	};
 
-	std::unordered_map<unsigned, PMT2DescriptorCounter> activePMT2Counter;		// keeps track of the number of descriptors in the allocated PMT2 tables
+	std::unordered_map<unsigned, PMT2DescriptorCounter> activePMT2Counter;		// keeps track of the number of descriptors in the allocated PMT2 tables (non-shared)
 
 	PhysicalAddress freePMTSlotHead;											// head for the PMT1 blocks
 	PhysicalAddress freeBlocksHead;												// head for the free physical blocks in memory
@@ -69,6 +69,10 @@ private:																		// private attributes
 
 	DiskManager* diskManager;													// encapsulates all of the operations with the partition
 
+	std::mutex mutex;															// a mutex for synchronisation
+
+	struct SharedSegment;
+	std::unordered_map<std::string, SharedSegment> sharedSegments;				// keeps track of all the shared segments
 
 																				// CONSTANTS
 
@@ -86,10 +90,13 @@ private:																		// private attributes
 
 	struct PMT2Descriptor {
 		char basicBits = 0;														// _/_/_/execute/write/read/dirty/valid bits
-		char advancedBits = 0;													// _/_/_/_/referenced/refThrashing/hasCluster/inUse bits
+		char advancedBits = 0;													// _/_/_/isShared/referenced/refThrashing/hasCluster/inUse bits
 
 		// bool hasCluster = 0;													// indicates whether a cluster has been reserved for this page
 		// bool inUse = 0;														// indicates whether the descriptor is in use yet or not
+		// bool isShared = 0;													// if the page is shared, the _block_ field points to the mutual descriptor
+
+		// if isShared == 1 => only bits ex/wr/rd + inUse are looked at (in the original descriptors)
 
 		PhysicalAddress block = nullptr;										// remember pointer to a block of physical memory
 		PMT2Descriptor* next =  nullptr;										// next in segment and next in the global politics swapping technique
@@ -105,6 +112,10 @@ private:																		// private attributes
 		void setEx() { basicBits |= 0x10; } bool getEx() { return (basicBits & 0x10) ? true : false; }
 		
 																				// advanced bit operations
+
+		void setShared() { advancedBits |= 0x10; } void resetShared() { advancedBits &= 0xEF; }
+		bool getShared() { return (advancedBits & 0x10) ? true : false; }
+
 		void setReferenced() { advancedBits |= 0x08; } void resetReferenced() { advancedBits &= 0xF7; }
 		bool getReferenced() { return (advancedBits & 0x08) ? true : false; }
 
@@ -128,7 +139,20 @@ private:																		// private attributes
 	typedef PMT2Descriptor PMT2[PMT2Size];
 	typedef PMT2* PMT1[PMT1Size];
 
-	std::mutex mutex;															// a mutex for synchronisation
+																				// SHARED SEGMENT ORGANISATION
+
+	struct SharedSegment {
+		std::string name;
+		VirtualAddress startAddress;											// start address (always 0 for a shared segment)
+		AccessType accessType;													// the access type for the segment that the process declared would use
+
+		PageNum length = 0;														// length of the shared segment
+		unsigned short pmt2Number;												// number of allocated PMT2s for this shared segment
+
+		PMT1* pmt1;																// pointer to this shared segment's PMT1 table
+
+		// check if this needs a list to all the current processes pointing to it or smthng
+	};
 
 	friend class Process;
 	friend class KernelProcess;
@@ -142,6 +166,12 @@ private:
 																				// returns address to first descriptor, nullptr if any errors occur
 	PMT2Descriptor* allocateDescriptors(KernelProcess* process, VirtualAddress startAddress, 
 										PageNum segmentSize, AccessType flags, bool load, void* content);
+
+	// returns address to first descriptor, allocates a new shared segment descriptor table if need be or places pointers to an existing one
+	PMT2Descriptor* connectToSharedSegment(KernelProcess* process, VirtualAddress startAddress,
+										PageNum segmentSize, const char* name, AccessType flags);
+
+	// allocateSharedDescriptors
 
 	PhysicalAddress getSwappedBlock();											// performs the swapping algorithm and returns a block
 

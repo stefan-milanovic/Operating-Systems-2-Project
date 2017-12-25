@@ -158,12 +158,30 @@ void KernelProcess::blockIfThrashing() {
 
 Process* KernelProcess::clone(ProcessId pid) {
 
-	Process* cloneProcess = nullptr;
+	// this method doesn't need to check for space, it just performs copying (KernelSystem has checked this already)
+	Process* clonedProcess;
 
-	return cloneProcess;
+	return clonedProcess;
 }
 
 Status KernelProcess::createSharedSegment(VirtualAddress startAddress, PageNum segmentSize, const char* name, AccessType flags) {
+	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
+
+																					// no need to check here for disk space -- disk for a created segment is
+																				    // only reserved once a page with no disk cluster has to be swapped out
+
+																					// creates one as well if it didn't exist
+	KernelSystem::PMT2Descriptor* firstDescriptor = system->connectToSharedSegment(this, startAddress, segmentSize, name, flags);
+
+	if (!firstDescriptor) return TRAP;
+
+	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
+
+
+	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, []
+	(const SegmentInfo& seg1, SegmentInfo& seg2) {
+		return seg1.startAddress < seg2.startAddress;
+	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
 
 	return OK;
 }
@@ -184,9 +202,7 @@ bool KernelProcess::inconsistencyCheck(VirtualAddress startAddress, PageNum segm
 
 	if (inconsistentAddressCheck(startAddress)) return true;					// check if squared into start of page
 
-	// segments field is sorted by startAddress
-	// check if there is any overlapping segment
-
+																				// segments vector is sorted by startAddress
 	VirtualAddress endAddress = startAddress + segmentSize * PAGE_SIZE;
 
 	for (auto segment = segments.begin(); segment != segments.end(); segment++) {
@@ -196,8 +212,7 @@ bool KernelProcess::inconsistencyCheck(VirtualAddress startAddress, PageNum segm
 			return true;														// there's an overlap with the currently observed segment
 	}
 
-	return false;
-	// returns false if there is no inconsistency, true if the new segment would overlap with an existing one
+	return false;																// returns false if there is no inconsistency, true if the new segment would overlap with an existing one
 }
 
 bool KernelProcess::inconsistentAddressCheck(VirtualAddress startAddress) {

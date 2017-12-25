@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <iterator>
 #include <mutex>
+#include <cmath>
+#include <string>
 
 #include "DiskManager.h"
 #include "KernelSystem.h"
@@ -53,6 +55,8 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpa
 }
 
 KernelSystem::~KernelSystem() {
+	// TODO: delete leftover processes
+
 	delete[] referenceRegisters;
 	delete diskManager;
 }
@@ -151,7 +155,21 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 }
 
 Process* KernelSystem::cloneProcess(ProcessId pid) {
-	
+	mutex.lock();
+
+	Process* wantedProcess = nullptr;										// try and find target process for cloning
+	try {
+	wantedProcess = activeProcesses.at(pid);								// check for the key but don't insert if nonexistant 
+	}																		// (that is what unordered_map::operator[] would do)
+	catch (std::out_of_range noProcessWithPID) {
+		mutex.unlock();
+		return nullptr;
+	}
+
+	// TODO: check how much space wantedProcess has and see if it's replicable (both in memory and disk)
+
+	// If everything's ok, clone
+	return wantedProcess->clone(processIDGenerator++);
 }
 
 // private methods
@@ -206,27 +224,27 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 	}
 
 	PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
-	KernelSystem::PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
+	PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
 
 	for (auto entry = entries.begin(); entry != entries.end(); entry++) {			// create all documented descriptors
 
-		KernelSystem::PMT2* pmt2 = (*(process->PMT1))[entry->pmt1Entry];
+		PMT2* pmt2 = (*(process->PMT1))[entry->pmt1Entry];
 
 		unsigned pageKey = simpleHash(process->id, entry->pmt1Entry);				// key used to access the PMT2 descriptor counter hash table
 
 		if (!pmt2) {																// if the PMT2 table doesn't exist, create it
-			pmt2 = (*(process->PMT1))[entry->pmt1Entry] = (KernelSystem::PMT2*)getFreePMTSlot();
+			pmt2 = (*(process->PMT1))[entry->pmt1Entry] = (PMT2*)getFreePMTSlot();
 			initialisePMT2(pmt2);
 			if (!pmt2) { mutex.unlock(); return nullptr; }							// this exception should never happen (number of free PMT slots was checked in previous loop)
 
 			PMT2DescriptorCounter newPMT2Counter(pmt2);								// add new PMT2 to the system's PMT2 descriptor counter
-			activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
+			activePMT2Counter.insert(std::pair<unsigned, PMT2DescriptorCounter>(pageKey, newPMT2Counter));
 
 		}
 
 		activePMT2Counter[pageKey].counter++;										// a new descriptor is being added to this PMT2 -- increase the counter
 
-		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];	// access the targetted descriptor
+		PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];	// access the targetted descriptor
 		if (!pageOffsetCounter) {													// chain it
 			firstDescriptor = pageDescriptor;
 			temp = firstDescriptor;
@@ -264,6 +282,270 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 
 	mutex.unlock();
 	return firstDescriptor;															// operation was successful -- return address of the first descriptor
+}
+
+KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess* process, VirtualAddress startAddress,
+	PageNum segmentSize, const char* name, AccessType flags) {
+
+	mutex.lock();
+
+	SharedSegment sharedSegment;														// check if a shared segment with that name already exists
+
+	struct EntryCreationHelper {														// helper struct for transcation reasons
+		unsigned short pmt1Entry;														// entry in pmt1
+		unsigned short pmt2Entry;														// entry in pmt2
+	};
+
+	std::vector<unsigned short> missingPMT2s;											// remember indices of PMT2 tables that need to be allocated
+	std::vector<EntryCreationHelper> entries;											// contains info of all pages that will be loaded
+
+	try {																				
+		sharedSegment = sharedSegments.at(std::string(name));							// check for the key but don't insert if nonexistant 
+	}																					// (that is what unordered_map::operator[] would do)
+	catch (std::out_of_range noProcessWithPID) {
+																						// shared segment doesn't exist -- create it, then connect
+																						// (if there's space for all the needed page tables)
+
+		unsigned short sharedSegmentRequiredPMTs = 1 + ceil(segmentSize / PMT2Size);	// for the shared segment: 1xPMT1 + needed, fixed amount of PMT2s
+
+
+		for (PageNum i = 0; i < segmentSize; i++) {										// document PMT2 descriptors
+			VirtualAddress blockVirtualAddress = startAddress + i * PAGE_SIZE;
+			EntryCreationHelper entry;													// extract relevant parts of the address
+
+			entry.pmt1Entry = KernelSystem::extractPage1Part(blockVirtualAddress);
+			entry.pmt2Entry = KernelSystem::extractPage2Part(blockVirtualAddress);
+
+			entries.push_back(entry);
+
+			PMT2* pmt2 = (*(process->PMT1))[entry.pmt1Entry];			     			// access the PMT2 pointer
+			if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), entry.pmt1Entry)) {
+				missingPMT2s.push_back(entry.pmt1Entry);								// if that pmt2 table doesn't exist yet, add it to the miss list
+				if (missingPMT2s.size() + sharedSegmentRequiredPMTs > numberOfFreePMTSlots) {		// also count the required PMT for the shared segment		
+					mutex.unlock();
+					return nullptr;														// surely insufficient number of slots in PMT memory
+				}
+			}
+		}
+													
+		sharedSegment.startAddress = 0;													// initialise the new shared segment
+		sharedSegment.length = segmentSize;
+		sharedSegment.pmt2Number = ceil(segmentSize / PMT2Size);
+		sharedSegment.accessType = flags;
+		sharedSegment.name = std::string(name);
+		sharedSegment.pmt1 = (PMT1*)getFreePMTSlot();
+
+		PMT2Descriptor* sharedFirstDescriptor = nullptr, *sharedTemp = nullptr;
+		for (unsigned short i = 0; i < sharedSegment.length; i++) {						// allocate PMT2s for shared segment and initialise descriptors
+			unsigned short sharedPMT1Entry = i / sharedSegment.pmt2Number;
+			unsigned short sharedPMT2Entry = i % sharedSegment.pmt2Number;
+
+			PMT2* pmt2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+
+			if (!pmt2) {
+				pmt2 = (*(sharedSegment.pmt1))[sharedPMT1Entry] = (PMT2*)getFreePMTSlot();
+				initialisePMT2(pmt2);
+			}
+			PMT2Descriptor* pageDescriptor = &(*pmt2)[sharedPMT2Entry];					// access the targetted descriptor
+			if (!sharedFirstDescriptor) {												// chain it
+				sharedFirstDescriptor = pageDescriptor;
+				sharedTemp = sharedFirstDescriptor;
+			}
+			else {
+				sharedTemp->next = pageDescriptor;
+				sharedTemp = sharedTemp->next;
+			}
+
+			pageDescriptor->setInUse();
+			switch (flags) {															// set access rights
+			case READ:
+				pageDescriptor->setRd();
+				break;
+			case WRITE:
+				pageDescriptor->setWr();
+				break;
+			case READ_WRITE:
+				pageDescriptor->setRdWr();
+				break;
+			case EXECUTE:
+				pageDescriptor->setEx();
+				break;
+			}
+			pageDescriptor->resetHasCluster();											// the page does not have a reserved cluster on the disk yet
+		}
+
+																						// add the shared segment to the system's shared segment map
+		sharedSegments.insert(std::pair<std::string, SharedSegment>(sharedSegment.name, sharedSegment));
+
+		PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
+		PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
+
+		for (auto entry = entries.begin(); entry != entries.end(); entry++) {			// create all documented descriptors
+
+			PMT2* pmt2 = (*(process->PMT1))[entry->pmt1Entry];
+
+			unsigned pageKey = simpleHash(process->id, entry->pmt1Entry);				// key used to access the PMT2 descriptor counter hash table
+
+			if (!pmt2) {																// if the PMT2 table doesn't exist, create it
+				pmt2 = (*(process->PMT1))[entry->pmt1Entry] = (PMT2*)getFreePMTSlot();
+				initialisePMT2(pmt2);
+				if (!pmt2) { mutex.unlock(); return nullptr; }							// this exception should never happen (number of free PMT slots was checked in previous loop)
+
+				PMT2DescriptorCounter newPMT2Counter(pmt2);								// add new PMT2 to the system's PMT2 descriptor counter
+				activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
+
+			}
+
+			activePMT2Counter[pageKey].counter++;										// a new descriptor is being added to this PMT2 -- increase the counter
+
+			PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];				// access the targetted descriptor
+			if (!pageOffsetCounter) {													// chain it
+				firstDescriptor = pageDescriptor;
+				temp = firstDescriptor;
+			}
+			else {
+				temp->next = pageDescriptor;
+				temp = temp->next;
+			}
+
+			pageDescriptor->setShared();												// this descriptor represents a shared page
+			PhysicalAddress sharedPageDescriptorAddress;								// find the address for the adequate sharedsegment descriptor
+
+			unsigned short sharedPMT1Entry = pageOffsetCounter / sharedSegment.pmt2Number;
+			unsigned short sharedPMT2Entry = pageOffsetCounter % sharedSegment.pmt2Number;
+			
+			PMT2* sharedPMT2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+			sharedPageDescriptorAddress = (PhysicalAddress)(&((*sharedPMT2)[sharedPMT2Entry]));
+
+			pageDescriptor->setBlock(sharedPageDescriptorAddress);						// set the _block_ pointer to it
+
+			pageDescriptor->setInUse();													// set that the descriptor is now in use
+			switch (flags) {															// set access rights
+			case READ:
+				pageDescriptor->setRd();
+				break;
+			case WRITE:
+				pageDescriptor->setWr();
+				break;
+			case READ_WRITE:
+				pageDescriptor->setRdWr();
+				break;
+			case EXECUTE:
+				pageDescriptor->setEx();
+				break;
+			}
+			
+			pageDescriptor->resetHasCluster();										// the page does not have a reserved cluster on the disk yet
+
+		}
+
+		mutex.unlock();
+		return firstDescriptor;
+	}
+
+																						// shared segment already exists -- only connect (if there's space)
+	if (segmentSize > sharedSegment.length) {
+		mutex.unlock();																	// a process may connect to a segment with an equal or lower segSize
+		return nullptr;
+	}
+
+	switch (sharedSegment.accessType) {													// access rights to the shared segment have to match for all processes
+	case READ:
+		if (!(flags == READ || flags == READ_WRITE)) {	mutex.unlock();	return nullptr; }
+		break;
+	case WRITE:
+		if (!(flags == WRITE || flags == READ_WRITE)) { mutex.unlock(); return nullptr;	}
+		break;
+	case READ_WRITE:
+		if (flags == EXECUTE) { mutex.unlock(); return nullptr; }
+		break;
+	case EXECUTE:
+		if (flags != EXECUTE) { mutex.unlock(); return nullptr; }
+	}
+
+	for (PageNum i = 0; i < segmentSize; i++) {											// document PMT2 descriptors
+		VirtualAddress blockVirtualAddress = startAddress + i * PAGE_SIZE;
+		EntryCreationHelper entry;														// extract relevant parts of the address
+
+		entry.pmt1Entry = KernelSystem::extractPage1Part(blockVirtualAddress);
+		entry.pmt2Entry = KernelSystem::extractPage2Part(blockVirtualAddress);
+
+		entries.push_back(entry);
+
+		PMT2* pmt2 = (*(process->PMT1))[entry.pmt1Entry];			     				// access the PMT2 pointer
+		if (!pmt2 && !std::binary_search(missingPMT2s.begin(), missingPMT2s.end(), entry.pmt1Entry)) {
+			missingPMT2s.push_back(entry.pmt1Entry);									// if that pmt2 table doesn't exist yet, add it to the miss list
+			if (missingPMT2s.size() > numberOfFreePMTSlots) {
+				mutex.unlock();
+				return nullptr;															// surely insufficient number of slots in PMT memory
+			}
+		}
+	}
+
+	PageNum pageOffsetCounter = 0;														// create descriptor for each page, allocate pmt2 if needed
+	PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
+
+	for (auto entry = entries.begin(); entry != entries.end(); entry++) {			// create all documented descriptors
+
+		PMT2* pmt2 = (*(process->PMT1))[entry->pmt1Entry];
+
+		unsigned pageKey = simpleHash(process->id, entry->pmt1Entry);				// key used to access the PMT2 descriptor counter hash table
+
+		if (!pmt2) {																// if the PMT2 table doesn't exist, create it
+			pmt2 = (*(process->PMT1))[entry->pmt1Entry] = (PMT2*)getFreePMTSlot();
+			initialisePMT2(pmt2);
+			if (!pmt2) { mutex.unlock(); return nullptr; }							// this exception should never happen (number of free PMT slots was checked in previous loop)
+
+			PMT2DescriptorCounter newPMT2Counter(pmt2);								// add new PMT2 to the system's PMT2 descriptor counter
+			activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
+
+		}
+
+		activePMT2Counter[pageKey].counter++;										// a new descriptor is being added to this PMT2 -- increase the counter
+
+		PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];				// access the targetted descriptor
+		if (!pageOffsetCounter) {													// chain it
+			firstDescriptor = pageDescriptor;
+			temp = firstDescriptor;
+		}
+		else {
+			temp->next = pageDescriptor;
+			temp = temp->next;
+		}
+
+		pageDescriptor->setShared();												// this descriptor represents a shared page
+		PhysicalAddress sharedPageDescriptorAddress;								// find the address for the adequate sharedsegment descriptor
+
+		unsigned short sharedPMT1Entry = pageOffsetCounter / sharedSegment.pmt2Number;
+		unsigned short sharedPMT2Entry = pageOffsetCounter % sharedSegment.pmt2Number;
+
+		PMT2* sharedPMT2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+		sharedPageDescriptorAddress = (PhysicalAddress)(&((*sharedPMT2)[sharedPMT2Entry]));
+
+		pageDescriptor->setBlock(sharedPageDescriptorAddress);						// set the _block_ pointer to it
+
+		pageDescriptor->setInUse();													// set that the descriptor is now in use
+		switch (flags) {															// set access rights
+		case READ:
+			pageDescriptor->setRd();
+			break;
+		case WRITE:
+			pageDescriptor->setWr();
+			break;
+		case READ_WRITE:
+			pageDescriptor->setRdWr();
+			break;
+		case EXECUTE:
+			pageDescriptor->setEx();
+			break;
+		}
+
+		pageDescriptor->resetHasCluster();										// the page does not have a reserved cluster on the disk yet
+
+	}
+
+	mutex.unlock();
+	return firstDescriptor;
 }
 
 PhysicalAddress KernelSystem::getSwappedBlock() {									// this function always returns a block from the list, nullptr if no space on disk
