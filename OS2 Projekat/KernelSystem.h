@@ -96,7 +96,7 @@ private:																		// private attributes
 		// bool inUse = 0;														// indicates whether the descriptor is in use yet or not
 		// bool isShared = 0;													// if the page is shared, the _block_ field points to the mutual descriptor
 
-		// if isShared == 1 => only bits ex/wr/rd + inUse are looked at (in the original descriptors)
+		// if isShared == 1														=> only bits ex/wr/rd + inUse are looked at (in the original descriptors)
 
 		PhysicalAddress block = nullptr;										// remember pointer to a block of physical memory
 		PMT2Descriptor* next =  nullptr;										// next in segment and next in the global politics swapping technique
@@ -140,6 +140,11 @@ private:																		// private attributes
 	typedef PMT2* PMT1[PMT1Size];
 
 																				// SHARED SEGMENT ORGANISATION
+	
+	struct ReverseSegmentInfo {
+		KernelProcess* process;													// process pointer to a process that is currently sharing a segment
+		PMT2Descriptor* firstDescriptor;										// fast access to the first descriptor for deletion
+	};
 
 	struct SharedSegment {
 		std::string name;
@@ -150,6 +155,9 @@ private:																		// private attributes
 		unsigned short pmt2Number;												// number of allocated PMT2s for this shared segment
 
 		PMT1* pmt1;																// pointer to this shared segment's PMT1 table
+		
+		ProcessId numberOfProcessesSharing;										// a counter for all the processes that are sharing this segment
+		std::vector<ReverseSegmentInfo> processesSharing;						// remembers relevant pointers to all the processes currently sharing this segment
 
 		// check if this needs a list to all the current processes pointing to it or smthng
 	};

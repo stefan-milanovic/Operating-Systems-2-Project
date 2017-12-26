@@ -38,10 +38,10 @@ private:
 
 	bool inconsistencyCheck(VirtualAddress startAddress, PageNum segmentSize);
 	bool inconsistentAddressCheck(VirtualAddress startAddress);
+																			// Deletes a segment and skips several checks present in the user deleteSegment() method.
+	Status optimisedDeleteSegment(SegmentInfo* segment, bool checkIndex, unsigned index );
 
-	Status optimisedDeleteSegment(SegmentInfo* segment);// Deletes a segment and skips several checks present in the user deleteSegment() method.
-
-	void releaseMemoryAndDisk(SegmentInfo* segment);	// Releases everything reserved by the given segment. Used in the delete methods.
+	void releaseMemoryAndDisk(SegmentInfo* segment);						// Releases everything reserved by the given segment. Used in the delete methods.
 
 
 	unsigned concatenatePageParts(unsigned short page1, unsigned short page2);

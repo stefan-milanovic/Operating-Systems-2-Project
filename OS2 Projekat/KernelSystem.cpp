@@ -374,9 +374,6 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 			pageDescriptor->resetHasCluster();											// the page does not have a reserved cluster on the disk yet
 		}
 
-																						// add the shared segment to the system's shared segment map
-		sharedSegments.insert(std::pair<std::string, SharedSegment>(sharedSegment.name, sharedSegment));
-
 		PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
 		PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
 
@@ -439,6 +436,14 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 
 		}
 
+		ReverseSegmentInfo revSegInfo;
+		revSegInfo.firstDescriptor = firstDescriptor;
+		revSegInfo.process = process;
+		sharedSegment.numberOfProcessesSharing++;
+		sharedSegment.processesSharing.push_back(revSegInfo);
+																						// add the shared segment to the system's shared segment map
+		sharedSegments.insert(std::pair<std::string, SharedSegment>(sharedSegment.name, sharedSegment));
+
 		mutex.unlock();
 		return firstDescriptor;
 	}
@@ -450,7 +455,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 	}
 
 	switch (sharedSegment.accessType) {													// access rights to the shared segment have to match for all processes
-	case READ:
+	case READ:	
 		if (!(flags == READ || flags == READ_WRITE)) {	mutex.unlock();	return nullptr; }
 		break;
 	case WRITE:
@@ -543,6 +548,12 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 		pageDescriptor->resetHasCluster();										// the page does not have a reserved cluster on the disk yet
 
 	}
+
+	ReverseSegmentInfo revSegInfo;
+	revSegInfo.firstDescriptor = firstDescriptor;
+	revSegInfo.process = process;
+	sharedSegment.numberOfProcessesSharing++;
+	sharedSegment.processesSharing.push_back(revSegInfo);
 
 	mutex.unlock();
 	return firstDescriptor;

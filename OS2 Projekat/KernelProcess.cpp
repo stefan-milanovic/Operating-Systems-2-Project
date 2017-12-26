@@ -16,7 +16,7 @@ KernelProcess::KernelProcess(ProcessId pid) {
 KernelProcess::~KernelProcess() {
 		
 	while (segments.size() > 0) {													// remove any leftover segments from memory and/or disk
-		optimisedDeleteSegment(&(segments.back()));
+		optimisedDeleteSegment(&(segments.back()), false, -1);
 		segments.pop_back();
 	}
 
@@ -186,9 +186,39 @@ Status KernelProcess::createSharedSegment(VirtualAddress startAddress, PageNum s
 	return OK;
 }
 
-Status KernelProcess::disconnectSharedSegment(const char* name) {
+Status KernelProcess::disconnectSharedSegment(const char* name) {					// works like deleteSegment() but doesn't affect the shared segment, memory or disk
 
-	return OK;
+	KernelSystem::SharedSegment sharedSegment;
+	try {
+		sharedSegment = system->sharedSegments.at(std::string(name));				// check for the key but don't insert if nonexistant 
+	}																				// (that is what unordered_map::operator[] would do)
+	catch (std::out_of_range noProcessWithPID) {
+		return TRAP;																// cannot disconnect from a shared segment that doesn't exist
+	}
+
+																					// check if a segment is connected to the shared segment
+
+	for (auto processInfo = sharedSegment.processesSharing.begin(); processInfo != sharedSegment.processesSharing.end(); processInfo++) {
+		if (processInfo->process == this) {											// segment in virtual address space found
+
+			SegmentInfo* segmentInVirtualSpaceInfo;									// this pointer will surely be found
+			unsigned indexOfSegment = 0;											// index of segment in the list
+
+			for (auto segmentInfo = this->segments.begin(); segmentInfo != this->segments.end(); segmentInfo++, indexOfSegment++) {
+				if (segmentInfo->firstDescAddress == processInfo->firstDescriptor) {
+					segmentInVirtualSpaceInfo = &(*segmentInfo);
+				}
+			}
+			optimisedDeleteSegment(segmentInVirtualSpaceInfo, true, indexOfSegment);// delete segment from process virtual address space
+
+			sharedSegment.numberOfProcessesSharing--;								// decrease counter of processes sharing
+			sharedSegment.processesSharing.erase(processInfo);						// remove this process from the list of processes sharing the segment
+
+			return OK;
+		}
+	}
+
+	return TRAP;																	// shared segment with this name exists but this process isn't connected to it
 }
 
 Status KernelProcess::deleteSharedSegment(const char* name) {
@@ -226,10 +256,14 @@ bool KernelProcess::inconsistentAddressCheck(VirtualAddress startAddress) {
 	return false;
 }
 
-Status KernelProcess::optimisedDeleteSegment(SegmentInfo* segment) {
+Status KernelProcess::optimisedDeleteSegment(SegmentInfo* segment, bool checkIndex, unsigned index) {
 
 	releaseMemoryAndDisk(segment);													// release the memory and the disk of the entire segment
-	segments.pop_back();															// remove the last segment from the segment vector
+
+	if (!checkIndex)
+		segments.pop_back();														// remove the last segment from the segment vector
+	else
+		segments.erase(segments.begin() + index);									// remove target segment info at a specifix index
 
 	return OK;
 }
@@ -244,12 +278,14 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 																						// for each page of the segment do
 	for (PageNum i = 0; i < segment->length; i++, temp = temp->next, tempAddress += PAGE_SIZE) {		
 
-		if (temp->getV()) {																// if the page is in memory, declare the block as free
-			system->setFreeBlock(temp->block);
-		}
+		if (!temp->getShared()) {														// only free memory and disk if it's not a shared page
+			if (temp->getV()) {															// if the page is in memory, declare the block as free
+				system->setFreeBlock(temp->block);
+			}
 
-		if (temp->getHasCluster()) {													// if the page is saved on disk, declare the cluster as free
-			system->diskManager->freeCluster(temp->disk);
+			if (temp->getHasCluster()) {												// if the page is saved on disk, declare the cluster as free
+				system->diskManager->freeCluster(temp->disk);
+			}
 		}
 
 		temp->resetInUse();																// the page is not used anymore
