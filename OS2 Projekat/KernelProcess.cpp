@@ -207,8 +207,10 @@ Status KernelProcess::disconnectSharedSegment(const char* name) {					// works l
 			for (auto segmentInfo = this->segments.begin(); segmentInfo != this->segments.end(); segmentInfo++, indexOfSegment++) {
 				if (segmentInfo->firstDescAddress == processInfo->firstDescriptor) {
 					segmentInVirtualSpaceInfo = &(*segmentInfo);
+					break;
 				}
 			}
+
 			optimisedDeleteSegment(segmentInVirtualSpaceInfo, true, indexOfSegment);// delete segment from process virtual address space
 
 			sharedSegment.numberOfProcessesSharing--;								// decrease counter of processes sharing
@@ -221,7 +223,68 @@ Status KernelProcess::disconnectSharedSegment(const char* name) {					// works l
 	return TRAP;																	// shared segment with this name exists but this process isn't connected to it
 }
 
-Status KernelProcess::deleteSharedSegment(const char* name) {
+Status KernelProcess::deleteSharedSegment(const char* name) {						// any process can request a shared segment deletion
+
+	KernelSystem::SharedSegment sharedSegment;
+	try {
+		sharedSegment = system->sharedSegments.at(std::string(name));				// check for the key but don't insert if nonexistant 
+	}																				
+	catch (std::out_of_range noProcessWithPID) {
+		return TRAP;																// cannot delete a shared segment that doesn't exist
+	}
+
+	// shared segment found -- delete PMT2s for all segments, all segment infos from respective processes, then delete PMT1+PMT2s+memory+disk for the shared segment
+
+	for (auto processInfo = sharedSegment.processesSharing.begin(); processInfo != sharedSegment.processesSharing.end(); processInfo++) {
+		KernelProcess* processSharingSegment = processInfo->process;
+
+		SegmentInfo* segmentProcessIsSharing = nullptr;								// this will surely be found
+		unsigned indexOfSegment = 0;
+
+																					// find the adequate segment in the current process
+		for (auto segmentInfo = processSharingSegment->segments.begin(); segmentInfo != processSharingSegment->segments.end(); segmentInfo++, indexOfSegment++) {
+			if (segmentInfo->firstDescAddress == processInfo->firstDescriptor) {
+				segmentProcessIsSharing = &(*segmentInfo);
+				break;
+			}
+		}
+																					// delete segment from process virtual address space
+		processSharingSegment->optimisedDeleteSegment(segmentProcessIsSharing, true, indexOfSegment);	
+
+		sharedSegment.numberOfProcessesSharing--;									// decrease counter of processes sharing
+		sharedSegment.processesSharing.erase(processInfo);							// remove this process from the list of processes sharing the segment
+
+	}
+
+	// delete PMT1+PMT2s+memory+disk for the shared segment
+
+	for (unsigned short i = 0; i < sharedSegment.length; i++) {						// go through all PMT2s and deallocate descriptors, memory and disk
+		unsigned short sharedPMT1Entry = i / sharedSegment.pmt2Number;
+		unsigned short sharedPMT2Entry = i % sharedSegment.pmt2Number;
+
+		KernelSystem::PMT2* pmt2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+
+		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[sharedPMT2Entry];	// access the targetted descriptor
+		
+																					// descriptors in these PMT2s surely have isShared = false
+		if (pageDescriptor->getV()) {												// if the page is in memory, declare the block as free
+			system->setFreeBlock(pageDescriptor->block);
+		}
+
+		if (pageDescriptor->getHasCluster()) {										// if the page is saved on disk, declare the cluster as free
+			system->diskManager->freeCluster(pageDescriptor->disk);
+		}
+
+		pageDescriptor->resetInUse();												// the page is not used anymore
+
+	}
+
+	for (unsigned short i = 0; i < sharedSegment.pmt2Number; i++) {					// free PMT2 tables for the shared segment
+		system->freePMTSlot((PhysicalAddress)(*(sharedSegment.pmt1))[i]);
+	}
+	system->freePMTSlot((PhysicalAddress)sharedSegment.pmt1);						// free PMT1 table for the shared segment
+
+	system->sharedSegments.erase(std::string(name));								// erase the shared segment from the system's map
 
 	return OK;
 }

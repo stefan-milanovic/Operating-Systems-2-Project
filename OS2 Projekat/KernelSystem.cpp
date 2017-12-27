@@ -301,7 +301,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 
 	try {																				
 		sharedSegment = sharedSegments.at(std::string(name));							// check for the key but don't insert if nonexistant 
-	}																					// (that is what unordered_map::operator[] would do)
+	}																					
 	catch (std::out_of_range noProcessWithPID) {
 																						// shared segment doesn't exist -- create it, then connect
 																						// (if there's space for all the needed page tables)
