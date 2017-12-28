@@ -2,7 +2,10 @@
 #include <iostream>
 #include "ProcessTest.h"
 #include "System.h"
+#include "RandomNumberGenerator.h"
+#include "SystemTest.h"
 
+// 15
 #define POWER_OF_NUMBER_OF_INSTRUCTIONS (5)
 
 ProcessTest::ProcessTest(System &system, SystemTest &systemTest_) : systemTest(systemTest_), finished(false) {
@@ -30,8 +33,11 @@ ProcessTest::ProcessTest(System &system, SystemTest &systemTest_) : systemTest(s
 
 Status ProcessTest::addCodeSegment(VirtualAddress address, PageNum size) {
 	char *initData = new char[size * PAGE_SIZE];
+	bool *dirtyData = new bool[size * PAGE_SIZE];
+
 	for (int i = 0; i < size * PAGE_SIZE; i++) {
 		initData[i] = i;
+		dirtyData[i] = true;
 	}
 
 	Status status = process->loadSegment(address, size, EXECUTE, initData);
@@ -40,14 +46,23 @@ Status ProcessTest::addCodeSegment(VirtualAddress address, PageNum size) {
 		return status;
 	}
 
-	checkMemory.emplace_back(std::make_tuple<PhysicalAddress, VirtualAddress, PageNum>(
-		(PhysicalAddress)initData, std::move(address), std::move(size)));
+	MemoryBackup backup;
+	backup.first = initData;
+	backup.second = dirtyData;
+
+	checkMemory.emplace_back(std::make_tuple<MemoryBackup, VirtualAddress, PageNum>(
+		std::move(backup), std::move(address), std::move(size)));
 
 	return OK;
 }
 
 Status ProcessTest::addDataSegment(VirtualAddress address, PageNum size) {
 	char *data = new char[size * PAGE_SIZE];
+	bool *dirtyData = new bool[size * PAGE_SIZE];
+
+	for (int i = 0; i < size * PAGE_SIZE; i++) {
+		dirtyData[i] = false;
+	}
 
 	Status status = process->createSegment(address, size, READ_WRITE);
 	if (status != OK) {
@@ -55,17 +70,24 @@ Status ProcessTest::addDataSegment(VirtualAddress address, PageNum size) {
 		return status;
 	}
 
-	checkMemory.emplace_back(std::make_tuple<PhysicalAddress, VirtualAddress, PageNum>(
-		(PhysicalAddress)data, std::move(address), std::move(size)));
+	MemoryBackup backup;
+	backup.first = data;
+	backup.second = dirtyData;
+
+	checkMemory.emplace_back(std::make_tuple<MemoryBackup, VirtualAddress, PageNum>(
+		std::move(backup), std::move(address), std::move(size)));
 
 	return OK;
 }
 
 ProcessTest::~ProcessTest() {
 	for (auto iter = checkMemory.begin(); iter != checkMemory.end(); iter++) {
-		PhysicalAddress pa = std::get<0>(*iter);
-		delete[] pa;
+		MemoryBackup &backup = std::get<0>(*iter);
+		delete[] backup.first;
+		delete[] backup.second;
 	}
+
+	delete process;
 }
 
 VirtualAddress ProcessTest::getOffset(VirtualAddress address) {
@@ -87,27 +109,16 @@ char ProcessTest::readFromAddress(VirtualAddress address) {
 }
 
 PhysicalAddress ProcessTest::getPhyAddress(VirtualAddress address) {
-	std::tuple<PhysicalAddress, VirtualAddress, PageNum> segment;
+	std::tuple<MemoryBackup, VirtualAddress, PageNum> segment = getSegmentInfo(address);
 
-	VirtualAddress begin;
-	auto iter = checkMemory.begin();
-	for (; iter != checkMemory.end(); iter++) {
-		begin = std::get<1>(*iter);
-		VirtualAddress end = begin + PAGE_SIZE * std::get<2>(*iter);
-
-		if (begin <= address && address < end) {
-			segment = *iter;
-			break;
-		}
-	}
-
-	assert(iter != checkMemory.end());
-
-	PhysicalAddress pa = std::get<0>(segment);
+	VirtualAddress begin = std::get<1>(segment);
+	PhysicalAddress pa = std::get<0>(segment).first;
 	VirtualAddress offset = address - begin;
 
 	return (PhysicalAddress)((char *)pa + offset);
 }
+
+
 
 void ProcessTest::run() {
 	VirtualAddressGenerator rN(0);
@@ -140,7 +151,7 @@ void ProcessTest::run() {
 				}
 				addresses.emplace_back(numbers[k], type, data);
 			}
-			Status status = systemTest.doInstruction(*process, addresses);
+			Status status = systemTest.doInstruction(*process, addresses, *this);
 			if (status != OK) {
 				std::cout << "Instruction in process " << process->getProcessId() << " failed.\n";
 				std::cout << "Terminating process\n";
@@ -156,5 +167,46 @@ bool ProcessTest::isFinished() const {
 	return finished;
 }
 
+std::tuple<ProcessTest::MemoryBackup, VirtualAddress, PageNum>
+ProcessTest::getSegmentInfo(VirtualAddress address) {
+	std::tuple<MemoryBackup, VirtualAddress, PageNum> segment;
 
+	auto iter = checkMemory.begin();
+	for (; iter != checkMemory.end(); iter++) {
+		VirtualAddress begin = std::get<1>(*iter);
+		VirtualAddress end = begin + PAGE_SIZE * std::get<2>(*iter);
+
+		if (begin <= address && address < end) {
+			segment = *iter;
+			break;
+		}
+	}
+
+	assert(iter != checkMemory.end());
+
+	return segment;
+}
+
+void ProcessTest::checkValue(VirtualAddress address, char value) {
+	std::tuple<MemoryBackup, VirtualAddress, PageNum> segment = getSegmentInfo(address);
+	MemoryBackup &backup = std::get<0>(segment);
+
+	VirtualAddress begin = std::get<1>(segment);
+	VirtualAddress offset = address - begin;
+
+	if (backup.second[offset]) {
+		assert(backup.first[offset] == value);
+	}
+}
+
+void ProcessTest::markDirty(VirtualAddress address) {
+	std::tuple<MemoryBackup, VirtualAddress, PageNum> segment = getSegmentInfo(address);
+
+	MemoryBackup &backup = std::get<0>(segment);
+
+	VirtualAddress begin = std::get<1>(segment);
+	VirtualAddress offset = address - begin;
+
+	backup.second[offset] = true;
+}
 

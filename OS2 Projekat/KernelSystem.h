@@ -69,7 +69,7 @@ private:																		// private attributes
 
 	DiskManager* diskManager;													// encapsulates all of the operations with the partition
 
-	std::mutex mutex;															// a mutex for synchronisation
+	std::recursive_mutex mutex;													// a mutex for synchronisation
 
 	struct SharedSegment;
 	std::unordered_map<std::string, SharedSegment> sharedSegments;				// keeps track of all the shared segments
@@ -195,8 +195,8 @@ private:
 	static unsigned short extractPage2Part(VirtualAddress address);
 	static unsigned short extractWordPart(VirtualAddress address);
 
-	unsigned simpleHash(unsigned a, unsigned b) { return ((a + 1) * b + 3) % activeProcesses.max_size(); }
-
+	// unsigned simpleHash(unsigned a, unsigned b) { return ((a + 1) * b + 3) % activeProcesses.max_size(); }
+	unsigned simpleHash(unsigned a, unsigned b) { return (((a + b) * (a + b + 1)) / 2 + b) % activeProcesses.max_size(); }
 };
 
 

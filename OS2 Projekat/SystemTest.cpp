@@ -1,6 +1,9 @@
 #include <cassert>
-#include <iostream>
 #include "SystemTest.h"
+#include "ProcessTest.h"
+
+
+#include <iostream>
 
 SystemTest::SystemTest(System &system_, void *processVMSpace, PageNum processVMSpaceSize)
 	: mutex(), system(system_), beginSpace(processVMSpace),
@@ -8,17 +11,18 @@ SystemTest::SystemTest(System &system_, void *processVMSpace, PageNum processVMS
 }
 
 Status SystemTest::doInstruction(Process &process,
-	const std::vector<std::tuple<VirtualAddress, AccessType, char>> addresses) {
+	const std::vector<std::tuple<VirtualAddress, AccessType, char>> addresses,
+	ProcessTest &processTest) {
 	for (auto iter = addresses.begin(); iter != addresses.end(); iter++) {
 		AccessType accessType = std::get<1>(*iter);
 		VirtualAddress address = std::get<0>(*iter);
 		char expectedValue = std::get<2>(*iter);
-
 		switch (accessType) {
 		case READ:
 		case EXECUTE: {
+			// std::cout << "Process " << processTest.process->getProcessId() << " before RD/EX mutex." << std::endl;
 			std::lock_guard<std::mutex> guard(mutex);
-
+			// std::cout << "Process " << processTest.process->getProcessId() << " passes RD/EX mutex." << std::endl;
 			char value;
 			Status success = system.access(process.getProcessId(), address, accessType);
 			if (success != OK) {
@@ -33,10 +37,12 @@ Status SystemTest::doInstruction(Process &process,
 			PhysicalAddress pa = process.getPhysicalAddress(address);
 			checkAddress(pa);
 			value = *(char *)pa;
-			assert(value == expectedValue);
-			return OK;
+			processTest.checkValue(address, expectedValue);
+			// std::cout << "Process " << processTest.process->getProcessId() << " exits RD/EX mutex." << std::endl;
+			break;
 		}
 		case WRITE: {
+			// std::cout << "Process " << processTest.process->getProcessId() << " before WR mutex." << std::endl;
 			std::lock_guard<std::mutex> guard(mutex);
 
 			Status success = system.access(process.getProcessId(), address, accessType);
@@ -52,12 +58,16 @@ Status SystemTest::doInstruction(Process &process,
 			PhysicalAddress pa = process.getPhysicalAddress(address);
 			checkAddress(pa);
 			*(char *)pa = expectedValue;
-			return OK;
+			processTest.markDirty(address);
+
+			// std::cout << "Process " << processTest.process->getProcessId() << " after WR mutex." << std::endl;
+
+			break;
 		}
 		default: break;
 		}
 	}
-	return PAGE_FAULT;
+	return OK;
 }
 
 void SystemTest::checkAddress(void *address) const {

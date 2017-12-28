@@ -65,7 +65,7 @@ Process* KernelSystem::createProcess() {
 
 	mutex.lock();
 
-	if (!numberOfFreePMTSlots) return nullptr;								// no space for a new PMT1 at the moment
+	if (!numberOfFreePMTSlots) { mutex.unlock(); return nullptr; }					// no space for a new PMT1 at the moment
 
 	Process* newProcess = new Process(processIDGenerator++);
 
@@ -74,6 +74,7 @@ Process* KernelSystem::createProcess() {
 	newProcess->pProcess->PMT1 = (PMT1*)getFreePMTSlot();					// grab a free PMT slot for the PMT1
 	if (!newProcess->pProcess->PMT1) {
 		delete newProcess;
+		mutex.unlock();
 		return nullptr;														// this exception should never occur
 	}
 
@@ -107,9 +108,6 @@ Time KernelSystem::periodicJob() {											// shift reference bit into referen
 
 
 Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType type) {
-
-	// Page1 - 8 bits ; Page2 - 6 bits ; Word - 10 bits
-
 	mutex.lock();
 
 	Process* wantedProcess = nullptr;
@@ -244,8 +242,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* p
 
 		activePMT2Counter[pageKey].counter++;										// a new descriptor is being added to this PMT2 -- increase the counter
 
-		PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];	// access the targetted descriptor
-		if (!pageOffsetCounter) {													// chain it
+		PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];				// access the targetted descriptor
+		if (!firstDescriptor) {														// chain it
 			firstDescriptor = pageDescriptor;
 			temp = firstDescriptor;
 		}
@@ -306,7 +304,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 																						// shared segment doesn't exist -- create it, then connect
 																						// (if there's space for all the needed page tables)
 
-		unsigned short sharedSegmentRequiredPMTs = 1 + ceil(segmentSize / PMT2Size);	// for the shared segment: 1xPMT1 + needed, fixed amount of PMT2s
+																						// for the shared segment: 1xPMT1 + needed, fixed amount of PMT2s
+		unsigned short sharedSegmentRequiredPMTs = 1 + (unsigned short)ceil(segmentSize / PMT2Size);
 
 
 		for (PageNum i = 0; i < segmentSize; i++) {										// document PMT2 descriptors
@@ -330,7 +329,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 													
 		sharedSegment.startAddress = 0;													// initialise the new shared segment
 		sharedSegment.length = segmentSize;
-		sharedSegment.pmt2Number = ceil(segmentSize / PMT2Size);
+		sharedSegment.pmt2Number = (unsigned short)ceil(segmentSize / PMT2Size);
 		sharedSegment.accessType = flags;
 		sharedSegment.name = std::string(name);
 		sharedSegment.pmt1 = (PMT1*)getFreePMTSlot();
@@ -396,7 +395,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 			activePMT2Counter[pageKey].counter++;										// a new descriptor is being added to this PMT2 -- increase the counter
 
 			PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];				// access the targetted descriptor
-			if (!pageOffsetCounter) {													// chain it
+			if (!firstDescriptor) {														// chain it
 				firstDescriptor = pageDescriptor;
 				temp = firstDescriptor;
 			}
@@ -408,8 +407,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 			pageDescriptor->setShared();												// this descriptor represents a shared page
 			PhysicalAddress sharedPageDescriptorAddress;								// find the address for the adequate sharedsegment descriptor
 
-			unsigned short sharedPMT1Entry = pageOffsetCounter / sharedSegment.pmt2Number;
-			unsigned short sharedPMT2Entry = pageOffsetCounter % sharedSegment.pmt2Number;
+			unsigned short sharedPMT1Entry = (unsigned short)pageOffsetCounter / sharedSegment.pmt2Number;
+			unsigned short sharedPMT2Entry = (unsigned short)pageOffsetCounter % sharedSegment.pmt2Number;
 			
 			PMT2* sharedPMT2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
 			sharedPageDescriptorAddress = (PhysicalAddress)(&((*sharedPMT2)[sharedPMT2Entry]));
@@ -509,7 +508,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 		activePMT2Counter[pageKey].counter++;										// a new descriptor is being added to this PMT2 -- increase the counter
 
 		PMT2Descriptor* pageDescriptor = &(*pmt2)[entry->pmt2Entry];				// access the targetted descriptor
-		if (!pageOffsetCounter) {													// chain it
+		if (!firstDescriptor) {														// chain it
 			firstDescriptor = pageDescriptor;
 			temp = firstDescriptor;
 		}
@@ -521,8 +520,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 		pageDescriptor->setShared();												// this descriptor represents a shared page
 		PhysicalAddress sharedPageDescriptorAddress;								// find the address for the adequate sharedsegment descriptor
 
-		unsigned short sharedPMT1Entry = pageOffsetCounter / sharedSegment.pmt2Number;
-		unsigned short sharedPMT2Entry = pageOffsetCounter % sharedSegment.pmt2Number;
+		unsigned short sharedPMT1Entry = (unsigned short)pageOffsetCounter / sharedSegment.pmt2Number;
+		unsigned short sharedPMT2Entry = (unsigned short)pageOffsetCounter % sharedSegment.pmt2Number;
 
 		PMT2* sharedPMT2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
 		sharedPageDescriptorAddress = (PhysicalAddress)(&((*sharedPMT2)[sharedPMT2Entry]));
@@ -561,16 +560,15 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 
 PhysicalAddress KernelSystem::getSwappedBlock() {									// this function always returns a block from the list, nullptr if no space on disk
 
-	// needs synchronisation
 	mutex.lock();
 
 	PMT2Descriptor* victimHasCluster, *victimHasNoCluster;
 	PageNum victimHasClusterIndex = -1, victimHasNoClusterIndex = -1;				// only compared if there is no room for a new write to the disk
 
-	PMT2Descriptor* victim = referenceRegisters[0].pageDescriptor;
-	PageNum victimIndex = 0;
+	PMT2Descriptor* victim;
+	PageNum victimIndex;
 
-	for (PageNum i = 1; i < processVMSpaceSize; i++) {								// find victim
+	for (PageNum i = 0; i < processVMSpaceSize; i++) {								// find victim
 		if (referenceRegisters[i].pageDescriptor->getHasCluster()) {
 			if (victimHasClusterIndex == -1) {
 				victimHasCluster = referenceRegisters[i].pageDescriptor;
@@ -597,7 +595,7 @@ PhysicalAddress KernelSystem::getSwappedBlock() {									// this function alway
 		}
 	}
 
-	if (victimHasClusterIndex == -1 && victimHasNoClusterIndex == -1) {				
+	if (victimHasClusterIndex == -1 && victimHasNoClusterIndex == -1) {
 		mutex.unlock();																// this should never be entered
 		return nullptr;
 	}
@@ -632,12 +630,13 @@ PhysicalAddress KernelSystem::getSwappedBlock() {									// this function alway
 	}
 
 	referenceRegisters[victimIndex].value = 0;										// reset history bits of block to zero
+																					// the pointer field is set in pageFault() after this function returns a block address
 
 	if (victim->getD()) {															// write the block to the disk if it's dirty (always true for never-before-written-to-disk createSegment() pages)
 		if (victim->getHasCluster())												// if the page already has a reserved cluster on the disk, write contents there
 			diskManager->writeToCluster(victim->getBlock(), victim->getDisk());
 		else {																		// if not, attempt to find an empty slot
-			victim->setDisk(diskManager->write(victim->block));				
+			victim->setDisk(diskManager->write(victim->getBlock()));
 			if (victim->getDisk() == -1) {
 				mutex.unlock();
 				return nullptr;														// no room on the disk or error while writing
@@ -651,16 +650,14 @@ PhysicalAddress KernelSystem::getSwappedBlock() {									// this function alway
 	victim->resetV();																// the page is no longer in memory, set valid to zero
 
 	mutex.unlock();
-
 	return victim->getBlock();														// return the address of the block the victim had
 }
 
 PhysicalAddress KernelSystem::getFreeBlock() {
 
-	// needs synchronisation
 	mutex.lock();
 
-	if (!freeBlocksHead) return nullptr;
+	if (!freeBlocksHead) { mutex.unlock(); return nullptr; }
 
 	PhysicalAddress block = freeBlocksHead;											// retrieve the free block
 	freeBlocksHead = (PhysicalAddress)(*(unsigned*)(block));						// move the free blocks head onto the next free block in the list
@@ -670,7 +667,7 @@ PhysicalAddress KernelSystem::getFreeBlock() {
 }
 
 void KernelSystem::setFreeBlock(PhysicalAddress newFreeBlock) {
-	// needs synchronisation
+
 	mutex.lock();
 	unsigned* block = (unsigned*)newFreeBlock;
 
@@ -680,19 +677,23 @@ void KernelSystem::setFreeBlock(PhysicalAddress newFreeBlock) {
 }
 
 PhysicalAddress KernelSystem::getFreePMTSlot() {
-	// doesn't need synchronisation because it is already called from a function that has mutex.lock()
-	if (!numberOfFreePMTSlots) return nullptr;
+
+	mutex.lock();
+
+	if (!numberOfFreePMTSlots) { mutex.unlock(); return nullptr; }
 
 	PhysicalAddress freeSlot = freePMTSlotHead;										// assign a free block to the required PMT1/PMT2
 	freePMTSlotHead = (PhysicalAddress)(*((unsigned*)freePMTSlotHead));				// move the pmt list head
 
 	numberOfFreePMTSlots--;															// decrease the number of free slots
 
+	mutex.unlock();
+
 	return freeSlot;
 }
 
 void KernelSystem::freePMTSlot(PhysicalAddress slotAddress) {
-	// needs synchronisation
+
 	mutex.lock();
 	unsigned* slot = (unsigned*)slotAddress;
 

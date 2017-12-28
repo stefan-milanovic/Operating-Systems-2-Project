@@ -7,11 +7,12 @@
 #include "part.h"
 #include "vm_declarations.h"
 #include "ProcessTest.h"
+#include "SystemTest.h"
 
-#include "KernelSystem.h"
-#define VM_SPACE_SIZE (10000)
+// 10000
+#define VM_SPACE_SIZE (1000)
 #define PMT_SPACE_SIZE (3000)
-#define N_PROCESS (2)
+#define N_PROCESS (40)
 #define PERIODIC_JOB_COST (1)
 
 PhysicalAddress alignPointer(PhysicalAddress address) {
@@ -22,7 +23,6 @@ PhysicalAddress alignPointer(PhysicalAddress address) {
 
 	return reinterpret_cast<PhysicalAddress> (addr);
 }
-
 
 int main() {
 	Partition part("p1.ini");
@@ -43,8 +43,11 @@ int main() {
 	std::mutex globalMutex;
 
 	for (int i = 0; i < N_PROCESS; i++) {
-		std::cout << "Create process " << i << std::endl;
 		process[i] = new ProcessTest(system, systemTest);
+	}
+
+	for (int i = 0; i < N_PROCESS; i++) {
+		std::cout << "Create process " << i << std::endl;
 		threads[i] = new std::thread(&ProcessTest::run, process[i]);
 	}
 
@@ -54,7 +57,7 @@ int main() {
 
 		std::lock_guard<std::mutex> guard(systemTest.getGlobalMutex());
 
-		// std::cout << "Doing periodic job\n";
+		std::cout << "Doing periodic job\n";
 
 		std::this_thread::sleep_for(std::chrono::microseconds(PERIODIC_JOB_COST));
 

@@ -16,8 +16,7 @@ KernelProcess::KernelProcess(ProcessId pid) {
 KernelProcess::~KernelProcess() {
 		
 	while (segments.size() > 0) {													// remove any leftover segments from memory and/or disk
-		optimisedDeleteSegment(&(segments.back()), false, -1);
-		segments.pop_back();
+		optimisedDeleteSegment(&(segments.back()), false, -1);						// calls segments.pop_back() 
 	}
 
 	system->freePMTSlot(PMT1);														// declare the PMT1 as free
@@ -53,7 +52,7 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
 	if (!system->diskManager->hasEnoughSpace(segmentSize)) 
-		return TRAP;				// if the partition doesn't have enough space
+		return TRAP;																// if the partition doesn't have enough space
 
 	// possibility to optimise this -- check it later
 
@@ -99,27 +98,33 @@ Status KernelProcess::deleteSegment(VirtualAddress startAddress) {
 Status KernelProcess::pageFault(VirtualAddress address) {
 	
 	// returns trap if blocks are full but disk is full as well and no space to save
+	system->mutex.lock();
 
 	KernelSystem::PMT2Descriptor* pageDescriptor = system->getPageDescriptor(this, address);
 	if (!pageDescriptor) {															// if there is no pmt2 for this address (aka random address)
+		system->mutex.unlock();
 		return TRAP;
 	}
 
 	if (!pageDescriptor->getInUse()) {												// access of random descriptor, page is not part of any segment
+		system->mutex.unlock();
 		return TRAP;
 	}
 
-	if (pageDescriptor->getV()) return OK;											// page is already loaded in memory
+	if (pageDescriptor->getV()) { system->mutex.unlock(); return OK; }				// page is already loaded in memory
 
 	PhysicalAddress freeBlock = system->getFreeBlock();								// attempt to find a free block, function returns nullptr if none exist
-	if (!freeBlock)
+	if (!freeBlock) {
 		freeBlock = system->getSwappedBlock();										// if a free block doesn't exist -- choose a block to swap out
-
-	if (!freeBlock) return TRAP;													// in case of createSegment: if no space on disk do not allow swap
+		std::cout << "Proces " << id << "got a swapped block." << std::endl;
+	}
+	if (!freeBlock) { system->mutex.unlock(); return TRAP; }						// in case of createSegment: if no space on disk do not allow swap
 
 	if (pageDescriptor->getHasCluster()) {											// if the page has a cluster on disk, read the contents
-	if (!system->diskManager->read(freeBlock, pageDescriptor->getDisk()))
-		return TRAP;																// if the read was unsucessful return adequate status
+		if (!system->diskManager->read(freeBlock, pageDescriptor->getDisk())) {
+			system->mutex.unlock();
+			return TRAP;															// if the read was unsucessful return adequate status
+		}
 	}
 
 
@@ -127,8 +132,9 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 	pageDescriptor->setBlock(freeBlock);											// set the given block in the descriptor
 
 																					// set register's descriptor pointer to this descriptor
-	system->referenceRegisters[(*((unsigned*)freeBlock) - *((unsigned*)system->processVMSpace)) / PAGE_SIZE].pageDescriptor = pageDescriptor;
+	system->referenceRegisters[((unsigned)(freeBlock) - (unsigned)(system->processVMSpace)) / PAGE_SIZE].pageDescriptor = pageDescriptor;
 
+	system->mutex.unlock();
 	return OK;
 }
 
