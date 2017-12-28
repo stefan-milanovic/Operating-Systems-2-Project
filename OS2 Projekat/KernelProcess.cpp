@@ -51,9 +51,12 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
-	if (!system->diskManager->hasEnoughSpace(segmentSize)) 
+	system->mutex.lock();
+	if (!system->diskManager->hasEnoughSpace(segmentSize)) {
+		system->mutex.unlock();
 		return TRAP;																// if the partition doesn't have enough space
-
+	}
+	system->mutex.unlock();
 	// possibility to optimise this -- check it later
 
 	KernelSystem::PMT2Descriptor* firstDescriptor = system->allocateDescriptors(this, startAddress, segmentSize, flags, true, content);
@@ -111,12 +114,15 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 		return TRAP;
 	}
 
+	if (pageDescriptor->getShared())												// if this page is of a shared segment, switch to the appropriate descriptor
+		pageDescriptor = (KernelSystem::PMT2Descriptor*)pageDescriptor->getBlock();
+
 	if (pageDescriptor->getV()) { system->mutex.unlock(); return OK; }				// page is already loaded in memory
 
 	PhysicalAddress freeBlock = system->getFreeBlock();								// attempt to find a free block, function returns nullptr if none exist
 	if (!freeBlock) {
 		freeBlock = system->getSwappedBlock();										// if a free block doesn't exist -- choose a block to swap out
-		std::cout << "Proces " << id << "got a swapped block." << std::endl;
+		// std::cout << "Proces " << id << "got a swapped block." << std::endl;
 	}
 	if (!freeBlock) { system->mutex.unlock(); return TRAP; }						// in case of createSegment: if no space on disk do not allow swap
 
@@ -143,6 +149,9 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 	KernelSystem::PMT2Descriptor* pageDescriptor = system->getPageDescriptor(this, address);
 
 	if (!pageDescriptor) return 0;															// pmt2 not allocated
+
+	if (pageDescriptor->getShared())														// if this page is of a shared segment, switch to the appropriate descriptor
+		pageDescriptor = (KernelSystem::PMT2Descriptor*)pageDescriptor->getBlock();
 
 	if (!pageDescriptor->getV()) return 0;													// page isn't loaded in memory
 
@@ -231,17 +240,20 @@ Status KernelProcess::disconnectSharedSegment(const char* name) {					// works l
 
 Status KernelProcess::deleteSharedSegment(const char* name) {						// any process can request a shared segment deletion
 
+	system->mutex.lock();
+
 	KernelSystem::SharedSegment sharedSegment;
 	try {
 		sharedSegment = system->sharedSegments.at(std::string(name));				// check for the key but don't insert if nonexistant 
 	}																				
 	catch (std::out_of_range noProcessWithPID) {
+		system->mutex.unlock();
 		return TRAP;																// cannot delete a shared segment that doesn't exist
 	}
 
 	// shared segment found -- delete PMT2s for all segments, all segment infos from respective processes, then delete PMT1+PMT2s+memory+disk for the shared segment
 
-	for (auto processInfo = sharedSegment.processesSharing.begin(); processInfo != sharedSegment.processesSharing.end(); processInfo++) {
+	for (auto processInfo = sharedSegment.processesSharing.begin(); processInfo != sharedSegment.processesSharing.end();) {
 		KernelProcess* processSharingSegment = processInfo->process;
 
 		SegmentInfo* segmentProcessIsSharing = nullptr;								// this will surely be found
@@ -258,7 +270,10 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 		processSharingSegment->optimisedDeleteSegment(segmentProcessIsSharing, true, indexOfSegment);	
 
 		sharedSegment.numberOfProcessesSharing--;									// decrease counter of processes sharing
-		sharedSegment.processesSharing.erase(processInfo);							// remove this process from the list of processes sharing the segment
+		auto removingProcessInfo = processInfo;
+		processInfo++;
+
+		sharedSegment.processesSharing.erase(removingProcessInfo);					// remove this process from the list of processes sharing the segment
 
 	}
 
@@ -292,6 +307,7 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 
 	system->sharedSegments.erase(std::string(name));								// erase the shared segment from the system's map
 
+	system->mutex.unlock();
 	return OK;
 }
 

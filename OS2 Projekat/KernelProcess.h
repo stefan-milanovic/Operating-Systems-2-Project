@@ -47,8 +47,6 @@ private:
 	unsigned concatenatePageParts(unsigned short page1, unsigned short page2);
 
 private:
-		
-	// DO SYNCHRONISATION
 
 	struct SegmentInfo {								// info about each segment the process has allocated
 		
@@ -67,6 +65,8 @@ private:
 	ProcessId id;										// process id
 	KernelSystem* system;								// the system this process is being run on, set in system's createProcess()
 	KernelSystem::PMT1* PMT1;							// page map table pointer of the first level, set in system's createProcess()
+
+	// unsigned short allocatedPMT2Counter;				// counts the number of allocated PMT2 tables (useful for cloning)
 
 	friend class System;
 	friend class KernelSystem;

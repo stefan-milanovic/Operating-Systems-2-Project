@@ -10,7 +10,7 @@
 #include "SystemTest.h"
 
 // 10000
-#define VM_SPACE_SIZE (1000)
+#define VM_SPACE_SIZE (10000)
 #define PMT_SPACE_SIZE (3000)
 #define N_PROCESS (40)
 #define PERIODIC_JOB_COST (1)

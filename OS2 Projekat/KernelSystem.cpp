@@ -55,7 +55,6 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpa
 }
 
 KernelSystem::~KernelSystem() {
-	// TODO: delete leftover processes
 
 	delete[] referenceRegisters;
 	delete diskManager;
@@ -124,6 +123,9 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 
 	if (!pageDescriptor->getInUse()) { mutex.unlock(); return TRAP; }		// attempted access of address that doesn't belong to any segment
 
+	if (pageDescriptor->getShared())										// if this page is of a shared segment, switch to the appropriate descriptor
+		pageDescriptor = (PMT2Descriptor*)pageDescriptor->getBlock();
+
 	if (!pageDescriptor->getV()) {											// the page isn't loaded in memory -- return page fault
 		mutex.unlock();
 		return PAGE_FAULT;
@@ -157,14 +159,18 @@ Process* KernelSystem::cloneProcess(ProcessId pid) {
 
 	Process* wantedProcess = nullptr;										// try and find target process for cloning
 	try {
-	wantedProcess = activeProcesses.at(pid);								// check for the key but don't insert if nonexistant 
+		wantedProcess = activeProcesses.at(pid);								// check for the key but don't insert if nonexistant 
 	}																		// (that is what unordered_map::operator[] would do)
 	catch (std::out_of_range noProcessWithPID) {
 		mutex.unlock();
 		return nullptr;
 	}
 
+	// basic implementation
+
 	// TODO: check how much space wantedProcess has and see if it's replicable (both in memory and disk)
+
+	PageNum wantedProcessCurrentSpace = 1;
 
 	// If everything's ok, clone
 	return wantedProcess->clone(processIDGenerator++);
@@ -326,9 +332,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 				}
 			}
 		}
-													
-		sharedSegment.startAddress = 0;													// initialise the new shared segment
-		sharedSegment.length = segmentSize;
+												
+		sharedSegment.length = segmentSize;												// initialise the new shared segment
 		sharedSegment.pmt2Number = (unsigned short)ceil(segmentSize / PMT2Size);
 		sharedSegment.accessType = flags;
 		sharedSegment.name = std::string(name);
@@ -431,11 +436,11 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 				break;
 			}
 			
-			pageDescriptor->resetHasCluster();										// the page does not have a reserved cluster on the disk yet
+			pageDescriptor->resetHasCluster();											// the page does not have a reserved cluster on the disk yet
 
 		}
 
-		ReverseSegmentInfo revSegInfo;
+		ReverseSegmentInfo revSegInfo;													// remember the process that has started sharing
 		revSegInfo.firstDescriptor = firstDescriptor;
 		revSegInfo.process = process;
 		sharedSegment.numberOfProcessesSharing++;
@@ -544,11 +549,11 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 			break;
 		}
 
-		pageDescriptor->resetHasCluster();										// the page does not have a reserved cluster on the disk yet
+		pageDescriptor->resetHasCluster();											// the page does not have a reserved cluster on the disk yet
 
 	}
 
-	ReverseSegmentInfo revSegInfo;
+	ReverseSegmentInfo revSegInfo;													// remember the process that has begun sharing
 	revSegInfo.firstDescriptor = firstDescriptor;
 	revSegInfo.process = process;
 	sharedSegment.numberOfProcessesSharing++;
@@ -564,7 +569,7 @@ PhysicalAddress KernelSystem::getSwappedBlock() {									// this function alway
 
 	PMT2Descriptor* victimHasCluster, *victimHasNoCluster;
 	PageNum victimHasClusterIndex = -1, victimHasNoClusterIndex = -1;				// only compared if there is no room for a new write to the disk
-
+		
 	PMT2Descriptor* victim;
 	PageNum victimIndex;
 
