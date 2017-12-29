@@ -16,6 +16,20 @@ KernelProcess::KernelProcess(ProcessId pid) {
 KernelProcess::~KernelProcess() {
 		
 	while (segments.size() > 0) {													// remove any leftover segments from memory and/or disk
+
+		auto segmentInfo = segments.back();
+																					// remove this process from the adequate shared segment
+		if (segmentInfo.sharedSegmentName != "") {									// (only if the user hasn't called disconnectShared() or deleteShared())
+
+			KernelSystem::SharedSegment& sharedSegment = system->sharedSegments.at(segmentInfo.sharedSegmentName);
+			auto reverseInfoToDelete = std::find_if(sharedSegment.processesSharing.begin(), sharedSegment.processesSharing.end(),
+				[this](const KernelSystem::ReverseSegmentInfo& info) {
+				return info.process == this;
+			});
+			sharedSegment.numberOfProcessesSharing--;								// decrease counter of processes sharing
+			sharedSegment.processesSharing.erase(reverseInfoToDelete);				// remove this process from the list of processes sharing the segment
+
+		}
 		optimisedDeleteSegment(&(segments.back()), false, -1);						// calls segments.pop_back() 
 	}
 
@@ -191,7 +205,7 @@ Status KernelProcess::createSharedSegment(VirtualAddress startAddress, PageNum s
 	if (!firstDescriptor) return TRAP;
 
 	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
-
+	newSegmentInfo.sharedSegmentName = name;
 
 	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, []
 	(const SegmentInfo& seg1, SegmentInfo& seg2) {
@@ -203,9 +217,9 @@ Status KernelProcess::createSharedSegment(VirtualAddress startAddress, PageNum s
 
 Status KernelProcess::disconnectSharedSegment(const char* name) {					// works like deleteSegment() but doesn't affect the shared segment, memory or disk
 
-	KernelSystem::SharedSegment sharedSegment;
+	KernelSystem::SharedSegment* sharedSegment;
 	try {
-		sharedSegment = system->sharedSegments.at(std::string(name));				// check for the key but don't insert if nonexistant 
+		sharedSegment = &(system->sharedSegments.at(std::string(name)));			// check for the key but don't insert if nonexistant 
 	}																				// (that is what unordered_map::operator[] would do)
 	catch (std::out_of_range noProcessWithPID) {
 		return TRAP;																// cannot disconnect from a shared segment that doesn't exist
@@ -213,7 +227,7 @@ Status KernelProcess::disconnectSharedSegment(const char* name) {					// works l
 
 																					// check if a segment is connected to the shared segment
 
-	for (auto processInfo = sharedSegment.processesSharing.begin(); processInfo != sharedSegment.processesSharing.end(); processInfo++) {
+	for (auto processInfo = sharedSegment->processesSharing.begin(); processInfo != sharedSegment->processesSharing.end(); processInfo++) {
 		if (processInfo->process == this) {											// segment in virtual address space found
 
 			SegmentInfo* segmentInVirtualSpaceInfo;									// this pointer will surely be found
@@ -228,8 +242,8 @@ Status KernelProcess::disconnectSharedSegment(const char* name) {					// works l
 
 			optimisedDeleteSegment(segmentInVirtualSpaceInfo, true, indexOfSegment);// delete segment from process virtual address space
 
-			sharedSegment.numberOfProcessesSharing--;								// decrease counter of processes sharing
-			sharedSegment.processesSharing.erase(processInfo);						// remove this process from the list of processes sharing the segment
+			sharedSegment->numberOfProcessesSharing--;								// decrease counter of processes sharing
+			sharedSegment->processesSharing.erase(processInfo);						// remove this process from the list of processes sharing the segment
 
 			return OK;
 		}
@@ -242,9 +256,9 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 
 	system->mutex.lock();
 
-	KernelSystem::SharedSegment sharedSegment;
+	KernelSystem::SharedSegment* sharedSegment;
 	try {
-		sharedSegment = system->sharedSegments.at(std::string(name));				// check for the key but don't insert if nonexistant 
+		sharedSegment = &(system->sharedSegments.at(std::string(name)));			// check for the key but don't insert if nonexistant 
 	}																				
 	catch (std::out_of_range noProcessWithPID) {
 		system->mutex.unlock();
@@ -253,7 +267,7 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 
 	// shared segment found -- delete PMT2s for all segments, all segment infos from respective processes, then delete PMT1+PMT2s+memory+disk for the shared segment
 
-	for (auto processInfo = sharedSegment.processesSharing.begin(); processInfo != sharedSegment.processesSharing.end();) {
+	for (auto processInfo = sharedSegment->processesSharing.begin(); processInfo != sharedSegment->processesSharing.end(); processInfo++) {
 		KernelProcess* processSharingSegment = processInfo->process;
 
 		SegmentInfo* segmentProcessIsSharing = nullptr;								// this will surely be found
@@ -268,22 +282,20 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 		}
 																					// delete segment from process virtual address space
 		processSharingSegment->optimisedDeleteSegment(segmentProcessIsSharing, true, indexOfSegment);	
+	}
 
-		sharedSegment.numberOfProcessesSharing--;									// decrease counter of processes sharing
-		auto removingProcessInfo = processInfo;
-		processInfo++;
-
-		sharedSegment.processesSharing.erase(removingProcessInfo);					// remove this process from the list of processes sharing the segment
-
+	while (sharedSegment->processesSharing.size() > 0) {							// empty all processes from shared segment
+		sharedSegment->numberOfProcessesSharing--;									// decrease counter of processes sharing
+		sharedSegment->processesSharing.pop_back();									// remove this process from the list of processes sharing the segment
 	}
 
 	// delete PMT1+PMT2s+memory+disk for the shared segment
 
-	for (unsigned short i = 0; i < sharedSegment.length; i++) {						// go through all PMT2s and deallocate descriptors, memory and disk
-		unsigned short sharedPMT1Entry = i / sharedSegment.pmt2Number;
-		unsigned short sharedPMT2Entry = i % sharedSegment.pmt2Number;
+	for (unsigned short i = 0; i < sharedSegment->length; i++) {					// go through all PMT2s and deallocate descriptors, memory and disk
+		unsigned short sharedPMT1Entry = i / KernelSystem::PMT2Size;
+		unsigned short sharedPMT2Entry = i % KernelSystem::PMT2Size;
 
-		KernelSystem::PMT2* pmt2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+		KernelSystem::PMT2* pmt2 = (*(sharedSegment->pmt1))[sharedPMT1Entry];
 
 		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[sharedPMT2Entry];	// access the targetted descriptor
 		
@@ -300,10 +312,10 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 
 	}
 
-	for (unsigned short i = 0; i < sharedSegment.pmt2Number; i++) {					// free PMT2 tables for the shared segment
-		system->freePMTSlot((PhysicalAddress)(*(sharedSegment.pmt1))[i]);
+	for (unsigned short i = 0; i < sharedSegment->pmt2Number; i++) {				// free PMT2 tables for the shared segment
+		system->freePMTSlot((PhysicalAddress)(*(sharedSegment->pmt1))[i]);
 	}
-	system->freePMTSlot((PhysicalAddress)sharedSegment.pmt1);						// free PMT1 table for the shared segment
+	system->freePMTSlot((PhysicalAddress)sharedSegment->pmt1);						// free PMT1 table for the shared segment
 
 	system->sharedSegments.erase(std::string(name));								// erase the shared segment from the system's map
 
@@ -359,7 +371,6 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 
 	KernelSystem::PMT2Descriptor* temp = segment->firstDescAddress;
 	VirtualAddress tempAddress = segment->startAddress;
-
 																						// for each page of the segment do
 	for (PageNum i = 0; i < segment->length; i++, temp = temp->next, tempAddress += PAGE_SIZE) {		
 

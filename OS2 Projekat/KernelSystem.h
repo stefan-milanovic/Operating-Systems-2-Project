@@ -56,6 +56,10 @@ private:																		// private attributes
 		PhysicalAddress pmt2StartAddress;										// start address of the PMT2
 		unsigned short counter = 0;												// number of descriptors in the PMT2 with the inUse bit equal to 1
 
+		// for each descriptor in this PMT2
+
+		unsigned short sourceDescriptorCounter = 0;								// used for shared cloning PMT2s to count number of references to each descriptor
+
 		PMT2DescriptorCounter() {}
 		PMT2DescriptorCounter(PhysicalAddress startAddress) : pmt2StartAddress(startAddress) {}
 	};
@@ -90,7 +94,7 @@ private:																		// private attributes
 
 	struct PMT2Descriptor {
 		char basicBits = 0;														// _/_/_/execute/write/read/dirty/valid bits
-		char advancedBits = 0;													// _/_/_/isShared/referenced/refThrashing/hasCluster/inUse bits
+		char advancedBits = 0;													// _/_/copyOnWrite/isShared/referenced/cloned/hasCluster/inUse bits
 
 		// bool hasCluster = 0;													// indicates whether a cluster has been reserved for this page
 		// bool inUse = 0;														// indicates whether the descriptor is in use yet or not
@@ -113,14 +117,17 @@ private:																		// private attributes
 		
 																				// advanced bit operations
 
+		void setCopyOnWrite() { advancedBits |= 0x20; } void resetCopyOnWrite() { advancedBits &= 0xDF; }
+		bool getCopyOnWrite() { return (advancedBits & 0x20) ? true : false; }
+
 		void setShared() { advancedBits |= 0x10; } void resetShared() { advancedBits &= 0xEF; }
 		bool getShared() { return (advancedBits & 0x10) ? true : false; }
 
 		void setReferenced() { advancedBits |= 0x08; } void resetReferenced() { advancedBits &= 0xF7; }
 		bool getReferenced() { return (advancedBits & 0x08) ? true : false; }
 
-		void setRefThrashing() { advancedBits |= 0x04; } void resetRefThrashing() { advancedBits &= 0xFB; }
-		bool getRefThrashing() { return (advancedBits & 0x04) ? true : false; }
+		void setCloned() { advancedBits |= 0x04; } void resetCloned() { advancedBits &= 0xFB; }
+		bool getCloned() { return (advancedBits & 0x04) ? true : false; }
 
 		void setHasCluster() { advancedBits |= 0x02; } void resetHasCluster() { advancedBits &= 0xFD; }
 		bool getHasCluster() { return (advancedBits & 0x02) ? true : false; }
@@ -148,7 +155,6 @@ private:																		// private attributes
 
 	struct SharedSegment {
 		std::string name;
-		VirtualAddress startAddress;											// start address (always 0 for a shared segment)
 		AccessType accessType;													// the access type for the segment that the process declared would use
 
 		PageNum length = 0;														// length of the shared segment
@@ -159,7 +165,6 @@ private:																		// private attributes
 		ProcessId numberOfProcessesSharing;										// a counter for all the processes that are sharing this segment
 		std::vector<ReverseSegmentInfo> processesSharing;						// remembers relevant pointers to all the processes currently sharing this segment
 
-		// check if this needs a list to all the current processes pointing to it or smthng
 	};
 
 	friend class Process;
@@ -197,6 +202,7 @@ private:
 
 	// unsigned simpleHash(unsigned a, unsigned b) { return ((a + 1) * b + 3) % activeProcesses.max_size(); }
 	unsigned simpleHash(unsigned a, unsigned b) { return (((a + b) * (a + b + 1)) / 2 + b) % activeProcesses.max_size(); }
+
 };
 
 

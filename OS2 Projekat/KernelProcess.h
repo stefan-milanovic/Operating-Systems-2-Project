@@ -54,6 +54,7 @@ private:
 		AccessType accessType;							// the access type for the segment that the process declared would use
 		PageNum length = 0;								// each segment's length (in blocks required)
 		KernelSystem::PMT2Descriptor* firstDescAddress;	// address of the first descriptor (from this point onwards for _length_ descriptors)
+		std::string sharedSegmentName = "";				// if this segment is shared, remember the name of the shared segment 
 
 		SegmentInfo(VirtualAddress startAddr, AccessType access, PageNum newLength, KernelSystem::PMT2Descriptor* descriptorAddress) :
 			startAddress(startAddr), accessType(access), length(newLength), firstDescAddress(descriptorAddress) {}

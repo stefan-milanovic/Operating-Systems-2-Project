@@ -159,20 +159,19 @@ Process* KernelSystem::cloneProcess(ProcessId pid) {
 
 	Process* wantedProcess = nullptr;										// try and find target process for cloning
 	try {
-		wantedProcess = activeProcesses.at(pid);								// check for the key but don't insert if nonexistant 
+		wantedProcess = activeProcesses.at(pid);							// check for the key but don't insert if nonexistant 
 	}																		// (that is what unordered_map::operator[] would do)
 	catch (std::out_of_range noProcessWithPID) {
 		mutex.unlock();
 		return nullptr;
 	}
 
-	// basic implementation
-
 	// TODO: check how much space wantedProcess has and see if it's replicable (both in memory and disk)
 
 	PageNum wantedProcessCurrentSpace = 1;
 
 	// If everything's ok, clone
+	mutex.unlock();
 	return wantedProcess->clone(processIDGenerator++);
 }
 
@@ -293,7 +292,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 
 	mutex.lock();
 
-	SharedSegment sharedSegment;														// check if a shared segment with that name already exists
+	SharedSegment* sharedSegment;														// check if a shared segment with that name already exists
 
 	struct EntryCreationHelper {														// helper struct for transcation reasons
 		unsigned short pmt1Entry;														// entry in pmt1
@@ -304,14 +303,14 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 	std::vector<EntryCreationHelper> entries;											// contains info of all pages that will be loaded
 
 	try {																				
-		sharedSegment = sharedSegments.at(std::string(name));							// check for the key but don't insert if nonexistant 
+		sharedSegment = &(sharedSegments.at(std::string(name)));						// check for the key but don't insert if nonexistant 
 	}																					
-	catch (std::out_of_range noProcessWithPID) {
+	catch (std::out_of_range sharedSegmentDoesntExist) {
 																						// shared segment doesn't exist -- create it, then connect
 																						// (if there's space for all the needed page tables)
 
 																						// for the shared segment: 1xPMT1 + needed, fixed amount of PMT2s
-		unsigned short sharedSegmentRequiredPMTs = 1 + (unsigned short)ceil(segmentSize / PMT2Size);
+		unsigned short sharedSegmentRequiredPMTs = 1 + (unsigned short)ceil((double)segmentSize / PMT2Size);
 
 
 		for (PageNum i = 0; i < segmentSize; i++) {										// document PMT2 descriptors
@@ -332,22 +331,33 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 				}
 			}
 		}
-												
-		sharedSegment.length = segmentSize;												// initialise the new shared segment
-		sharedSegment.pmt2Number = (unsigned short)ceil(segmentSize / PMT2Size);
-		sharedSegment.accessType = flags;
-		sharedSegment.name = std::string(name);
-		sharedSegment.pmt1 = (PMT1*)getFreePMTSlot();
+
+		SharedSegment newSharedSegment;
+		newSharedSegment.length = segmentSize;											// initialise the new shared segment
+		newSharedSegment.pmt2Number = (unsigned short)ceil((double)segmentSize / PMT2Size);
+		newSharedSegment.accessType = flags;
+		newSharedSegment.numberOfProcessesSharing = 0;
+		newSharedSegment.name = std::string(name);
+		newSharedSegment.pmt1 = (PMT1*)getFreePMTSlot();
+
+		for (unsigned short i = 0; i < PMT1Size; i++) {									// initialise all of its pointers to nullptr
+			(*(newSharedSegment.pmt1))[i] = nullptr;
+		}
+
+																						// add the shared segment to the system's shared segment map
+		sharedSegments.insert(std::pair<std::string, SharedSegment>(newSharedSegment.name, newSharedSegment));
+
+		sharedSegment = &(sharedSegments.at(std::string(name)));						// check for the key but don't insert if nonexistant 
 
 		PMT2Descriptor* sharedFirstDescriptor = nullptr, *sharedTemp = nullptr;
-		for (unsigned short i = 0; i < sharedSegment.length; i++) {						// allocate PMT2s for shared segment and initialise descriptors
-			unsigned short sharedPMT1Entry = i / sharedSegment.pmt2Number;
-			unsigned short sharedPMT2Entry = i % sharedSegment.pmt2Number;
+		for (unsigned short i = 0; i < sharedSegment->length; i++) {						// allocate PMT2s for shared segment and initialise descriptors
+			unsigned short sharedPMT1Entry = i / PMT2Size;
+			unsigned short sharedPMT2Entry = i % PMT2Size;
 
-			PMT2* pmt2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+			PMT2* pmt2 = (*(sharedSegment->pmt1))[sharedPMT1Entry];
 
 			if (!pmt2) {
-				pmt2 = (*(sharedSegment.pmt1))[sharedPMT1Entry] = (PMT2*)getFreePMTSlot();
+				pmt2 = (*(sharedSegment->pmt1))[sharedPMT1Entry] = (PMT2*)getFreePMTSlot();
 				initialisePMT2(pmt2);
 			}
 			PMT2Descriptor* pageDescriptor = &(*pmt2)[sharedPMT2Entry];					// access the targetted descriptor
@@ -412,10 +422,10 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 			pageDescriptor->setShared();												// this descriptor represents a shared page
 			PhysicalAddress sharedPageDescriptorAddress;								// find the address for the adequate sharedsegment descriptor
 
-			unsigned short sharedPMT1Entry = (unsigned short)pageOffsetCounter / sharedSegment.pmt2Number;
-			unsigned short sharedPMT2Entry = (unsigned short)pageOffsetCounter % sharedSegment.pmt2Number;
+			unsigned short sharedPMT1Entry = (unsigned short)pageOffsetCounter / PMT2Size;
+			unsigned short sharedPMT2Entry = (unsigned short)pageOffsetCounter % PMT2Size;
 			
-			PMT2* sharedPMT2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+			PMT2* sharedPMT2 = (*(sharedSegment->pmt1))[sharedPMT1Entry];
 			sharedPageDescriptorAddress = (PhysicalAddress)(&((*sharedPMT2)[sharedPMT2Entry]));
 
 			pageDescriptor->setBlock(sharedPageDescriptorAddress);						// set the _block_ pointer to it
@@ -436,6 +446,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 				break;
 			}
 			
+			pageOffsetCounter++;
 			pageDescriptor->resetHasCluster();											// the page does not have a reserved cluster on the disk yet
 
 		}
@@ -443,22 +454,20 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 		ReverseSegmentInfo revSegInfo;													// remember the process that has started sharing
 		revSegInfo.firstDescriptor = firstDescriptor;
 		revSegInfo.process = process;
-		sharedSegment.numberOfProcessesSharing++;
-		sharedSegment.processesSharing.push_back(revSegInfo);
-																						// add the shared segment to the system's shared segment map
-		sharedSegments.insert(std::pair<std::string, SharedSegment>(sharedSegment.name, sharedSegment));
+		sharedSegment->numberOfProcessesSharing++;
+		sharedSegment->processesSharing.push_back(revSegInfo);
 
 		mutex.unlock();
 		return firstDescriptor;
 	}
 
 																						// shared segment already exists -- only connect (if there's space)
-	if (segmentSize > sharedSegment.length) {
+	if (segmentSize > sharedSegment->length) {
 		mutex.unlock();																	// a process may connect to a segment with an equal or lower segSize
 		return nullptr;
 	}
 
-	switch (sharedSegment.accessType) {													// access rights to the shared segment have to match for all processes
+	switch (sharedSegment->accessType) {													// access rights to the shared segment have to match for all processes
 	case READ:	
 		if (!(flags == READ || flags == READ_WRITE)) {	mutex.unlock();	return nullptr; }
 		break;
@@ -491,7 +500,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 		}
 	}
 
-	PageNum pageOffsetCounter = 0;														// create descriptor for each page, allocate pmt2 if needed
+	PageNum pageOffsetCounter = 0;													// create descriptor for each page, allocate pmt2 if needed
 	PMT2Descriptor* firstDescriptor = nullptr, *temp = nullptr;
 
 	for (auto entry = entries.begin(); entry != entries.end(); entry++) {			// create all documented descriptors
@@ -525,10 +534,10 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 		pageDescriptor->setShared();												// this descriptor represents a shared page
 		PhysicalAddress sharedPageDescriptorAddress;								// find the address for the adequate sharedsegment descriptor
 
-		unsigned short sharedPMT1Entry = (unsigned short)pageOffsetCounter / sharedSegment.pmt2Number;
-		unsigned short sharedPMT2Entry = (unsigned short)pageOffsetCounter % sharedSegment.pmt2Number;
+		unsigned short sharedPMT1Entry = (unsigned short)pageOffsetCounter / PMT2Size;
+		unsigned short sharedPMT2Entry = (unsigned short)pageOffsetCounter % PMT2Size;
 
-		PMT2* sharedPMT2 = (*(sharedSegment.pmt1))[sharedPMT1Entry];
+		PMT2* sharedPMT2 = (*(sharedSegment->pmt1))[sharedPMT1Entry];
 		sharedPageDescriptorAddress = (PhysicalAddress)(&((*sharedPMT2)[sharedPMT2Entry]));
 
 		pageDescriptor->setBlock(sharedPageDescriptorAddress);						// set the _block_ pointer to it
@@ -548,7 +557,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 			pageDescriptor->setEx();
 			break;
 		}
-
+		pageOffsetCounter++;
 		pageDescriptor->resetHasCluster();											// the page does not have a reserved cluster on the disk yet
 
 	}
@@ -556,8 +565,8 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 	ReverseSegmentInfo revSegInfo;													// remember the process that has begun sharing
 	revSegInfo.firstDescriptor = firstDescriptor;
 	revSegInfo.process = process;
-	sharedSegment.numberOfProcessesSharing++;
-	sharedSegment.processesSharing.push_back(revSegInfo);
+	sharedSegment->numberOfProcessesSharing++;
+	sharedSegment->processesSharing.push_back(revSegInfo);
 
 	mutex.unlock();
 	return firstDescriptor;
