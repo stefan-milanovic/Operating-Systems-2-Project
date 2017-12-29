@@ -10,11 +10,11 @@
 
 KernelProcess::KernelProcess(ProcessId pid) {
 	this->id = pid;																	// assign the id of the process
-	// ...																			// other members are assigned in KernelSystem's createProcess()
+																					// ...																			// other members are assigned in KernelSystem's createProcess()
 }
 
 KernelProcess::~KernelProcess() {
-		
+
 	while (segments.size() > 0) {													// remove any leftover segments from memory and/or disk
 
 		auto segmentInfo = segments.back();
@@ -35,6 +35,10 @@ KernelProcess::~KernelProcess() {
 
 	system->freePMTSlot(PMT1);														// declare the PMT1 as free
 
+
+	if (system->thrashingSemaphore.get_count() < 0)									// there's at least one process that was blocked because of thrashing
+		system->thrashingSemaphore.notify();
+
 	system->activeProcesses.erase(id);												// remove the process from the system's active process hash map
 }
 
@@ -43,7 +47,7 @@ Status KernelProcess::createSegment(VirtualAddress startAddress, PageNum segment
 
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
-	// no need to check here for disk space -- disk for a created segment is only reserved once a page with no disk cluster has to be swapped out
+																					// no need to check here for disk space -- disk for a created segment is only reserved once a page with no disk cluster has to be swapped out
 
 	KernelSystem::PMT2Descriptor* firstDescriptor = system->allocateDescriptors(this, startAddress, segmentSize, flags, false, nullptr);
 
@@ -51,12 +55,12 @@ Status KernelProcess::createSegment(VirtualAddress startAddress, PageNum segment
 
 	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
 
-	
+
 	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, []
 	(const SegmentInfo& seg1, SegmentInfo& seg2) {
 		return seg1.startAddress < seg2.startAddress;
 	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
-	
+
 	return OK;
 }
 
@@ -71,14 +75,12 @@ Status KernelProcess::loadSegment(VirtualAddress startAddress, PageNum segmentSi
 		return TRAP;																// if the partition doesn't have enough space
 	}
 	system->mutex.unlock();
-	// possibility to optimise this -- check it later
-
 	KernelSystem::PMT2Descriptor* firstDescriptor = system->allocateDescriptors(this, startAddress, segmentSize, flags, true, content);
 
 	if (!firstDescriptor) return TRAP;												// error in descriptor allocation (eg. not enough room for all PMT2's)
 
 	SegmentInfo newSegmentInfo(startAddress, flags, segmentSize, firstDescriptor);	// create info about the segment for the process
-	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [](const SegmentInfo& segment1,  const SegmentInfo& segment2) {
+	segments.insert(std::upper_bound(segments.begin(), segments.end(), newSegmentInfo, [](const SegmentInfo& segment1, const SegmentInfo& segment2) {
 		return segment1.startAddress < segment2.startAddress;
 	}), newSegmentInfo);															// insert into the segment list sorted by startAddress
 
@@ -90,9 +92,9 @@ Status KernelProcess::deleteSegment(VirtualAddress startAddress) {
 
 	bool segmentFound = false;
 	int foundPosition = 0;
-		
+
 	SegmentInfo* segmentInfo;														// check if the start address is a start of a segment
-	for (auto segment = segments.begin(); segment != segments.end(); segment++, foundPosition++) {	
+	for (auto segment = segments.begin(); segment != segments.end(); segment++, foundPosition++) {
 
 		if (segment->startAddress > startAddress) return TRAP;						// address isn't at the start of any previous segment
 
@@ -113,8 +115,8 @@ Status KernelProcess::deleteSegment(VirtualAddress startAddress) {
 }
 
 Status KernelProcess::pageFault(VirtualAddress address) {
-	
-	// returns trap if blocks are full but disk is full as well and no space to save
+
+																					// returns trap if blocks are full but disk is full as well and no space to save
 	system->mutex.lock();
 
 	KernelSystem::PMT2Descriptor* pageDescriptor = system->getPageDescriptor(this, address);
@@ -136,7 +138,7 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 	PhysicalAddress freeBlock = system->getFreeBlock();								// attempt to find a free block, function returns nullptr if none exist
 	if (!freeBlock) {
 		freeBlock = system->getSwappedBlock();										// if a free block doesn't exist -- choose a block to swap out
-		// std::cout << "Proces " << id << "got a swapped block." << std::endl;
+																					// std::cout << "Proces " << id << "got a swapped block." << std::endl;
 	}
 	if (!freeBlock) { system->mutex.unlock(); return TRAP; }						// in case of createSegment: if no space on disk do not allow swap
 
@@ -152,7 +154,7 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 	pageDescriptor->setBlock(freeBlock);											// set the given block in the descriptor
 
 																					// set register's descriptor pointer to this descriptor
-	system->referenceRegisters[((unsigned)(freeBlock) - (unsigned)(system->processVMSpace)) / PAGE_SIZE].pageDescriptor = pageDescriptor;
+	system->referenceRegisters[((unsigned)(freeBlock)-(unsigned)(system->processVMSpace)) / PAGE_SIZE].pageDescriptor = pageDescriptor;
 
 	system->mutex.unlock();
 	return OK;
@@ -175,13 +177,53 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 	word = KernelSystem::extractWordPart(address);
 
 	// std::cout << "VA: " << address << " => PA: " << (unsigned long)pageBase + word << std::endl;
-	
-	return (PhysicalAddress)((unsigned long)(pageBase) + word);				
+
+	return (PhysicalAddress)((unsigned long)(pageBase)+word);
 }
 
 
 void KernelProcess::blockIfThrashing() {
-	
+
+	if (shouldBlockFlag) {
+
+		system->mutex.lock();
+																							// for each segment do
+		for (auto segment = segments.begin(); segment != segments.end(); segment++) {
+
+			KernelSystem::PMT2Descriptor* temp = segment->firstDescAddress;
+			for (PageNum i = 0; i < segment->length; i++, temp = temp->next) {
+
+				if (temp->getShared())
+					temp = (KernelSystem::PMT2Descriptor*)temp->getBlock();
+
+				if (temp->getV()) {																// if this descriptor has a page in memory 
+
+					if (temp->getD()) {															// write the block to the disk if it's dirty (always true for never-before-written-to-disk createSegment() pages)
+						if (temp->getHasCluster())												// if the page already has a reserved cluster on the disk, write contents there
+							system->diskManager->writeToCluster(temp->getBlock(), temp->getDisk());
+						else {																	// if not, attempt to find an empty slot
+							temp->setDisk(system->diskManager->write(temp->getBlock()));
+							if (temp->getDisk() == -1) {
+								system->mutex.unlock();
+								return;															// no room on the disk or error while writing
+							}
+							temp->setHasCluster();											// the victim now has a cluster on the disk
+						}
+						temp->resetD();
+					}
+
+					temp->resetV();																// this page is no longer in memory
+					system->setFreeBlock(temp->getBlock());										// chain the block in the free block list
+				}
+				temp->resetReferenced();
+			}
+
+		}
+		
+		shouldBlockFlag = false;
+		system->mutex.unlock();
+		system->thrashingSemaphore.wait();
+	}
 
 }
 
@@ -197,7 +239,7 @@ Status KernelProcess::createSharedSegment(VirtualAddress startAddress, PageNum s
 	if (inconsistencyCheck(startAddress, segmentSize)) return TRAP;					// check if squared into start of page or overlapping segment
 
 																					// no need to check here for disk space -- disk for a created segment is
-																				    // only reserved once a page with no disk cluster has to be swapped out
+																					// only reserved once a page with no disk cluster has to be swapped out
 
 																					// creates one as well if it didn't exist
 	KernelSystem::PMT2Descriptor* firstDescriptor = system->connectToSharedSegment(this, startAddress, segmentSize, name, flags);
@@ -225,7 +267,7 @@ Status KernelProcess::disconnectSharedSegment(const char* name) {					// works l
 		return TRAP;																// cannot disconnect from a shared segment that doesn't exist
 	}
 
-																					// check if a segment is connected to the shared segment
+	// check if a segment is connected to the shared segment
 
 	for (auto processInfo = sharedSegment->processesSharing.begin(); processInfo != sharedSegment->processesSharing.end(); processInfo++) {
 		if (processInfo->process == this) {											// segment in virtual address space found
@@ -259,7 +301,7 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 	KernelSystem::SharedSegment* sharedSegment;
 	try {
 		sharedSegment = &(system->sharedSegments.at(std::string(name)));			// check for the key but don't insert if nonexistant 
-	}																				
+	}
 	catch (std::out_of_range noProcessWithPID) {
 		system->mutex.unlock();
 		return TRAP;																// cannot delete a shared segment that doesn't exist
@@ -281,7 +323,7 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 			}
 		}
 																					// delete segment from process virtual address space
-		processSharingSegment->optimisedDeleteSegment(segmentProcessIsSharing, true, indexOfSegment);	
+		processSharingSegment->optimisedDeleteSegment(segmentProcessIsSharing, true, indexOfSegment);
 	}
 
 	while (sharedSegment->processesSharing.size() > 0) {							// empty all processes from shared segment
@@ -298,7 +340,7 @@ Status KernelProcess::deleteSharedSegment(const char* name) {						// any proces
 		KernelSystem::PMT2* pmt2 = (*(sharedSegment->pmt1))[sharedPMT1Entry];
 
 		KernelSystem::PMT2Descriptor* pageDescriptor = &(*pmt2)[sharedPMT2Entry];	// access the targetted descriptor
-		
+
 																					// descriptors in these PMT2s surely have isShared = false
 		if (pageDescriptor->getV()) {												// if the page is in memory, declare the block as free
 			system->setFreeBlock(pageDescriptor->block);
@@ -371,8 +413,8 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 
 	KernelSystem::PMT2Descriptor* temp = segment->firstDescAddress;
 	VirtualAddress tempAddress = segment->startAddress;
-																						// for each page of the segment do
-	for (PageNum i = 0; i < segment->length; i++, temp = temp->next, tempAddress += PAGE_SIZE) {		
+	// for each page of the segment do
+	for (PageNum i = 0; i < segment->length; i++, temp = temp->next, tempAddress += PAGE_SIZE) {
 
 		if (!temp->getShared()) {														// only free memory and disk if it's not a shared page
 			if (temp->getV()) {															// if the page is in memory, declare the block as free

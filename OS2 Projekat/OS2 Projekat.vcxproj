@@ -26,6 +26,7 @@
     <ClInclude Include="Process.h" />
     <ClInclude Include="ProcessTest.h" />
     <ClInclude Include="RandomNumberGenerator.h" />
+    <ClInclude Include="Semaphore.h" />
     <ClInclude Include="System.h" />
     <ClInclude Include="SystemTest.h" />
     <ClInclude Include="vm_declarations.h" />
@@ -48,7 +49,7 @@
     <ProjectGuid>{3E4B8DEE-7838-47F6-86E2-E3D82FB365D8}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>OS2Projekat</RootNamespace>
-    <WindowsTargetPlatformVersion>8.1</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.14393.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">

@@ -28,10 +28,10 @@ public:
 	void blockIfThrashing();
 
 	Process* clone(ProcessId pid);
- 	Status createSharedSegment(VirtualAddress startAddress,
- 	PageNum segmentSize, const char* name, AccessType flags);
- 	Status disconnectSharedSegment(const char* name);
- 	Status deleteSharedSegment(const char* name);
+	Status createSharedSegment(VirtualAddress startAddress,
+		PageNum segmentSize, const char* name, AccessType flags);
+	Status disconnectSharedSegment(const char* name);
+	Status deleteSharedSegment(const char* name);
 
 private:
 	struct SegmentInfo;
@@ -39,7 +39,7 @@ private:
 	bool inconsistencyCheck(VirtualAddress startAddress, PageNum segmentSize);
 	bool inconsistentAddressCheck(VirtualAddress startAddress);
 																			// Deletes a segment and skips several checks present in the user deleteSegment() method.
-	Status optimisedDeleteSegment(SegmentInfo* segment, bool checkIndex, unsigned index );
+	Status optimisedDeleteSegment(SegmentInfo* segment, bool checkIndex, unsigned index);
 
 	void releaseMemoryAndDisk(SegmentInfo* segment);						// Releases everything reserved by the given segment. Used in the delete methods.
 
@@ -49,7 +49,7 @@ private:
 private:
 
 	struct SegmentInfo {								// info about each segment the process has allocated
-		
+
 		VirtualAddress startAddress;					// start address in virtual space
 		AccessType accessType;							// the access type for the segment that the process declared would use
 		PageNum length = 0;								// each segment's length (in blocks required)
@@ -67,7 +67,7 @@ private:
 	KernelSystem* system;								// the system this process is being run on, set in system's createProcess()
 	KernelSystem::PMT1* PMT1;							// page map table pointer of the first level, set in system's createProcess()
 
-	// unsigned short allocatedPMT2Counter;				// counts the number of allocated PMT2 tables (useful for cloning)
+	bool shouldBlockFlag = false;						// if this flag is true and this process calls blockIfThrashing() it will be blocked
 
 	friend class System;
 	friend class KernelSystem;

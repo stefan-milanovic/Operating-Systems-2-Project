@@ -12,12 +12,12 @@
 #include "part.h"
 #include "vm_declarations.h"
 
-KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpaceSize_, 
+KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpaceSize_,
 	PhysicalAddress pmtSpace_, PageNum pmtSpaceSize_, Partition* partition_) {
 
 	processVMSpace = processVMSpace_;										// initialise info about physical blocks
 	processVMSpaceSize = processVMSpaceSize_;
-	
+
 	pmtSpace = pmtSpace_;													// initialise info about PMT blocks 
 	pmtSpaceSize = pmtSpaceSize_;
 
@@ -29,8 +29,8 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpa
 	diskManager = new DiskManager(partition_);								// create the manager for the partition
 
 	this->numberOfFreePMTSlots = pmtSpaceSize;
-																			// initialise lists
-	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;	
+	// initialise lists
+	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;
 	for (PageNum i = 0; i < (processVMSpaceSize <= pmtSpaceSize ? pmtSpaceSize : processVMSpaceSize); i++) {
 		if (i < processVMSpaceSize) {										// block list
 			if (i == processVMSpaceSize - 1) {
@@ -80,8 +80,8 @@ Process* KernelSystem::createProcess() {
 	for (unsigned short i = 0; i < PMT1Size; i++) {							// initialise all of its pointers to nullptr
 		(*(newProcess->pProcess->PMT1))[i] = nullptr;
 	}
-																			// add the new process to the hash map
-	activeProcesses.insert(std::pair<ProcessId, Process*>(processIDGenerator - 1, newProcess));	
+	// add the new process to the hash map
+	activeProcesses.insert(std::pair<ProcessId, Process*>(processIDGenerator - 1, newProcess));
 
 	// do other things if needed
 
@@ -107,6 +107,7 @@ Time KernelSystem::periodicJob() {											// shift reference bit into referen
 
 
 Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType type) {
+
 	mutex.lock();
 
 	Process* wantedProcess = nullptr;
@@ -114,19 +115,43 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 		wantedProcess = activeProcesses.at(pid);							// check for the key but don't insert if nonexistant 
 	}																		// (that is what unordered_map::operator[] would do)
 	catch (std::out_of_range noProcessWithPID) {
+		consecutivePageFaultsCounter = 0;									// reset page fault counter
 		mutex.unlock();
 		return TRAP;
 	}
 
 	PMT2Descriptor* pageDescriptor = getPageDescriptor(wantedProcess->pProcess, address);
-	if (!pageDescriptor) { mutex.unlock(); return PAGE_FAULT; }				// if PMT2 isn't created
+	if (!pageDescriptor) {
+		if (!freeBlocksHead) {												// only count page faults if all physical blocks are full
+			consecutivePageFaultsCounter++;
+			if (consecutivePageFaultsCounter == pageFaultLimitNumber) {		// set flag if limit is reached
+				consecutivePageFaultsCounter = 0;
+				wantedProcess->pProcess->shouldBlockFlag = true;
+				return TRAP;												// alert the system
+			}
+		}
+		mutex.unlock();
+		return PAGE_FAULT;													// if PMT2 isn't created
+	}
 
-	if (!pageDescriptor->getInUse()) { mutex.unlock(); return TRAP; }		// attempted access of address that doesn't belong to any segment
+	if (!pageDescriptor->getInUse()) {
+		consecutivePageFaultsCounter = 0;									// reset page fault counter
+		mutex.unlock();
+		return TRAP;														// attempted access of address that doesn't belong to any segment
+	}
 
 	if (pageDescriptor->getShared())										// if this page is of a shared segment, switch to the appropriate descriptor
 		pageDescriptor = (PMT2Descriptor*)pageDescriptor->getBlock();
 
 	if (!pageDescriptor->getV()) {											// the page isn't loaded in memory -- return page fault
+		if (!freeBlocksHead) {												// only count page faults if all physical blocks are full
+			consecutivePageFaultsCounter++;
+			if (consecutivePageFaultsCounter == pageFaultLimitNumber) {		// set flag if limit is reached
+				consecutivePageFaultsCounter = 0;
+				wantedProcess->pProcess->shouldBlockFlag = true;
+				return TRAP;												// alert the system
+			}
+		}
 		mutex.unlock();
 		return PAGE_FAULT;
 	}
@@ -135,23 +160,24 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 
 		switch (type) {														// check access rights
 		case READ:
-			if (!pageDescriptor->getRd()) { mutex.unlock(); return TRAP; }
+			if (!pageDescriptor->getRd()) { consecutivePageFaultsCounter = 0; mutex.unlock(); return TRAP; }
 			break;
 		case WRITE:
-			if (!pageDescriptor->getWr()) { mutex.unlock(); return TRAP; }
+			if (!pageDescriptor->getWr()) { consecutivePageFaultsCounter = 0; mutex.unlock(); return TRAP; }
 			pageDescriptor->setD();											// indicate that the page is dirty
 			break;
 		case READ_WRITE:
-			if (!pageDescriptor->getRd() || !pageDescriptor->getWr()) { mutex.unlock(); return TRAP; }
+			if (!pageDescriptor->getRd() || !pageDescriptor->getWr()) { consecutivePageFaultsCounter = 0; mutex.unlock(); return TRAP; }
 			break;
 		case EXECUTE:
-			if (!pageDescriptor->getEx()) { mutex.unlock(); return TRAP; }
+			if (!pageDescriptor->getEx()) { consecutivePageFaultsCounter = 0; mutex.unlock(); return TRAP; }
 			break;
 		}
+
+		consecutivePageFaultsCounter = 0;									// if the page is in memory, access doesn't return page fault so the counter can be reset
 		mutex.unlock();
 		return OK;															// page is in memory and the operation is allowed
 	}
-
 }
 
 Process* KernelSystem::cloneProcess(ProcessId pid) {
@@ -195,7 +221,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::getPageDescriptor(const KernelProces
 }
 
 KernelSystem::PMT2Descriptor* KernelSystem::allocateDescriptors(KernelProcess* process, VirtualAddress startAddress,
-										PageNum segmentSize, AccessType flags, bool load, void* content) {
+	PageNum segmentSize, AccessType flags, bool load, void* content) {
 
 	mutex.lock();
 
@@ -302,14 +328,14 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 	std::vector<unsigned short> missingPMT2s;											// remember indices of PMT2 tables that need to be allocated
 	std::vector<EntryCreationHelper> entries;											// contains info of all pages that will be loaded
 
-	try {																				
+	try {
 		sharedSegment = &(sharedSegments.at(std::string(name)));						// check for the key but don't insert if nonexistant 
-	}																					
+	}
 	catch (std::out_of_range sharedSegmentDoesntExist) {
-																						// shared segment doesn't exist -- create it, then connect
-																						// (if there's space for all the needed page tables)
+		// shared segment doesn't exist -- create it, then connect
+		// (if there's space for all the needed page tables)
 
-																						// for the shared segment: 1xPMT1 + needed, fixed amount of PMT2s
+		// for the shared segment: 1xPMT1 + needed, fixed amount of PMT2s
 		unsigned short sharedSegmentRequiredPMTs = 1 + (unsigned short)ceil((double)segmentSize / PMT2Size);
 
 
@@ -344,7 +370,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 			(*(newSharedSegment.pmt1))[i] = nullptr;
 		}
 
-																						// add the shared segment to the system's shared segment map
+		// add the shared segment to the system's shared segment map
 		sharedSegments.insert(std::pair<std::string, SharedSegment>(newSharedSegment.name, newSharedSegment));
 
 		sharedSegment = &(sharedSegments.at(std::string(name)));						// check for the key but don't insert if nonexistant 
@@ -424,7 +450,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 
 			unsigned short sharedPMT1Entry = (unsigned short)pageOffsetCounter / PMT2Size;
 			unsigned short sharedPMT2Entry = (unsigned short)pageOffsetCounter % PMT2Size;
-			
+
 			PMT2* sharedPMT2 = (*(sharedSegment->pmt1))[sharedPMT1Entry];
 			sharedPageDescriptorAddress = (PhysicalAddress)(&((*sharedPMT2)[sharedPMT2Entry]));
 
@@ -445,7 +471,7 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 				pageDescriptor->setEx();
 				break;
 			}
-			
+
 			pageOffsetCounter++;
 			pageDescriptor->resetHasCluster();											// the page does not have a reserved cluster on the disk yet
 
@@ -468,11 +494,11 @@ KernelSystem::PMT2Descriptor* KernelSystem::connectToSharedSegment(KernelProcess
 	}
 
 	switch (sharedSegment->accessType) {													// access rights to the shared segment have to match for all processes
-	case READ:	
-		if (!(flags == READ || flags == READ_WRITE)) {	mutex.unlock();	return nullptr; }
+	case READ:
+		if (!(flags == READ || flags == READ_WRITE)) { mutex.unlock();	return nullptr; }
 		break;
 	case WRITE:
-		if (!(flags == WRITE || flags == READ_WRITE)) { mutex.unlock(); return nullptr;	}
+		if (!(flags == WRITE || flags == READ_WRITE)) { mutex.unlock(); return nullptr; }
 		break;
 	case READ_WRITE:
 		if (flags == EXECUTE) { mutex.unlock(); return nullptr; }
@@ -578,7 +604,7 @@ PhysicalAddress KernelSystem::getSwappedBlock() {									// this function alway
 
 	PMT2Descriptor* victimHasCluster, *victimHasNoCluster;
 	PageNum victimHasClusterIndex = -1, victimHasNoClusterIndex = -1;				// only compared if there is no room for a new write to the disk
-		
+
 	PMT2Descriptor* victim;
 	PageNum victimIndex;
 
@@ -675,7 +701,7 @@ PhysicalAddress KernelSystem::getFreeBlock() {
 
 	PhysicalAddress block = freeBlocksHead;											// retrieve the free block
 	freeBlocksHead = (PhysicalAddress)(*(unsigned*)(block));						// move the free blocks head onto the next free block in the list
-	
+
 	mutex.unlock();
 	return block;
 }
