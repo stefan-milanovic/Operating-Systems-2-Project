@@ -57,8 +57,8 @@ private:																		// private attributes
 		PhysicalAddress pmt2StartAddress;										// start address of the PMT2
 		unsigned short counter = 0;												// number of descriptors in the PMT2 with the inUse bit equal to 1
 
-																				// for each descriptor in this PMT2
-		std::vector<unsigned> sourceDescriptorCounters;							// used for shared cloning PMT2s to count number of references to each descriptor
+																				
+		std::vector<std::pair<unsigned, unsigned>> sourceDescriptorCounters;	// if this is a cloning PMT2 remember number of references to each descriptor
 
 		PMT2DescriptorCounter() {}
 		PMT2DescriptorCounter(PhysicalAddress startAddress) : pmt2StartAddress(startAddress) {}
@@ -93,7 +93,7 @@ private:																		// private attributes
 
 	static const unsigned short pageFaultLimitNumber = 50;						// after _pageFaultLmitNumber_ consecutive page faults thrashing is detected
 
-	// MEMORY ORGANISATION
+																				// MEMORY ORGANISATION
 
 	struct PMT2Descriptor {
 		char basicBits = 0;														// _/_/_/execute/write/read/dirty/valid bits
@@ -104,13 +104,14 @@ private:																		// private attributes
 		// bool isShared = 0;													// if the page is shared, the _block_ field points to the mutual descriptor
 
 		// if isShared == 1														=> only bits ex/wr/rd + inUse are looked at (in the original descriptors)
+		// if cloned == 1														=> only bits ex/wr/rd + inUse + copyOnWrite are looked at
 
 		PhysicalAddress block = nullptr;										// remember pointer to a block of physical memory
-		PMT2Descriptor* next = nullptr;										// next in segment and next in the global politics swapping technique
+		PMT2Descriptor* next = nullptr;											// next in segment and next in the global politics swapping technique
 		ClusterNo disk;															// which cluster holds this exact page
 
 		PMT2Descriptor() {}
-		// basic bit operations
+																				// basic bit operations
 		void setV() { basicBits |= 0x01; } void resetV() { basicBits &= 0xFE; } bool getV() { return (basicBits & 0x01) ? true : false; }
 		void setD() { basicBits |= 0x02; } void resetD() { basicBits &= 0xFD; } bool getD() { return (basicBits & 0x02) ? true : false; }
 		void setRd() { basicBits |= 0x04; } bool getRd() { return (basicBits & 0x04) ? true : false; }
@@ -118,7 +119,7 @@ private:																		// private attributes
 		void setRdWr() { basicBits |= 0x0C; }
 		void setEx() { basicBits |= 0x10; } bool getEx() { return (basicBits & 0x10) ? true : false; }
 
-		// advanced bit operations
+																				// advanced bit operations
 
 		void setCopyOnWrite() { advancedBits |= 0x20; } void resetCopyOnWrite() { advancedBits &= 0xDF; }
 		bool getCopyOnWrite() { return (advancedBits & 0x20) ? true : false; }
@@ -149,7 +150,7 @@ private:																		// private attributes
 	typedef PMT2Descriptor PMT2[PMT2Size];
 	typedef PMT2* PMT1[PMT1Size];
 
-	// SHARED SEGMENT ORGANISATION
+																				// SHARED SEGMENT ORGANISATION
 
 	struct ReverseSegmentInfo {
 		KernelProcess* process;													// process pointer to a process that is currently sharing a segment
@@ -177,11 +178,11 @@ private:
 
 	PMT2Descriptor* getPageDescriptor(const KernelProcess* process, VirtualAddress address);
 
-	// returns address to first descriptor, nullptr if any errors occur
+																				// returns address to first descriptor, nullptr if any errors occur	
 	PMT2Descriptor* allocateDescriptors(KernelProcess* process, VirtualAddress startAddress,
 		PageNum segmentSize, AccessType flags, bool load, void* content);
 
-	// returns address to first descriptor, allocates a new shared segment descriptor table if need be or places pointers to an existing one
+						// returns address to first descriptor, allocates a new shared segment descriptor table if need be or places pointers to an existing one
 	PMT2Descriptor* connectToSharedSegment(KernelProcess* process, VirtualAddress startAddress,
 		PageNum segmentSize, const char* name, AccessType flags);
 

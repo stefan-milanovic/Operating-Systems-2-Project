@@ -229,8 +229,151 @@ void KernelProcess::blockIfThrashing() {
 
 Process* KernelProcess::clone(ProcessId pid) {
 
-	// this method doesn't need to check for space, it just performs copying (KernelSystem has checked this already)
-	Process* clonedProcess;
+	// this method doesn't need to check for space, it just performs cloning (KernelSystem has checked this already)
+
+	Process* clonedProcess = new Process(pid);
+
+	clonedProcess->pProcess->system = system;								// initialise system pointer and get a PMT1 slot
+	clonedProcess->pProcess->PMT1 = (KernelSystem::PMT1*)system->getFreePMTSlot();
+
+	for (unsigned short i = 0; i < KernelSystem::PMT1Size; i++) {			// initialise all of its pointers to nullptr
+		(*(clonedProcess->pProcess->PMT1))[i] = nullptr;
+	}
+
+	KernelSystem::PMT1* originalPMT1 = this->PMT1;							// go through all of the descriptors of the original and initialise appropriately
+
+	for (unsigned short i = 0; i < KernelSystem::PMT1Size; i++) {			// copy all tables, if a cloning PMT2 table is being made link both original and new one to it
+		KernelSystem::PMT2* originalPMT2 = (*originalPMT1)[i];
+		if (originalPMT2 != nullptr) {															// if a pmt2 exists perform cloning
+
+																								// create a PMT2 for the cloned process and initialise it
+			(*(clonedProcess->pProcess->PMT1))[i] = (KernelSystem::PMT2*)system->getFreePMTSlot();
+			system->initialisePMT2((*(clonedProcess->pProcess->PMT1))[i]);
+			KernelSystem::PMT2* clonedPMT2 = (*(clonedProcess->pProcess->PMT1))[i];
+
+			unsigned pageKey = system->simpleHash(clonedProcess->pProcess->id, i);				// key used to access the PMT2 descriptor counter hash table
+			KernelSystem::PMT2DescriptorCounter newPMT2Counter(clonedPMT2);						// add new PMT2 to the system's PMT2 descriptor counter
+			system->activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
+
+			CloningPMTRequest request = this->cloningPMTRequests[i];							// clone info
+			KernelSystem::PMT2* cloningPMT2 = nullptr;
+			KernelSystem::PMT2DescriptorCounter cloningPMT2Counter;								// remember counters for the cloning PMT2 as well
+			unsigned cloningKey;
+
+			if (request.shouldMakeCloningPMT2) {												// if a cloning PMT2 has to be made, descriptors must be redirected
+				cloningPMT2 = (KernelSystem::PMT2*)system->getFreePMTSlot();
+				system->initialisePMT2(cloningPMT2);
+
+				cloningKey = system->simpleHash(fixedCloningKey, i);							// key used to access the PMT2 descriptor counter hash table
+				cloningPMT2Counter.counter = 0;
+				cloningPMT2Counter.pmt2StartAddress = cloningPMT2;
+				system->activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(cloningKey, cloningPMT2Counter));
+
+			}
+
+			for (unsigned short j = 0; j < KernelSystem::PMT2Size; j++) {
+				KernelSystem::PMT2Descriptor* descriptor = &((*originalPMT2)[j]);
+				KernelSystem::PMT2Descriptor* clonedDescriptor = &((*clonedPMT2)[j]);
+
+				if (descriptor->getInUse()) {													// only observe the page descriptor if it is in use
+				
+					system->activePMT2Counter[pageKey].counter++;								// a new descriptor is being added to this cloned PMT2 -- increase the counter
+					clonedDescriptor->basicBits = descriptor->basicBits;						// the bits stay the same
+					clonedDescriptor->advancedBits = descriptor->advancedBits;
+					
+					// disk should never be set in here, it's always in either shared segment PMT2 or a cloning PMT2
+					// block is set depending on the bits in the original
+					// next is set while creating the segments for the process
+
+					if (descriptor->getShared()) {												// if the descriptor is pointing to a shared PMT2, link
+						clonedDescriptor->block = descriptor->block;
+					}
+					else {																		// the descriptor could have either cloned = 0 or cloned = 1
+						if (descriptor->getCloned()) {											// if cloned = 1 just link new clone to existing cloning PMT2
+
+							clonedDescriptor->block = descriptor->block;						// set the cloned block to point
+
+							cloningKey = system->simpleHash(fixedCloningKey, i);				// key used to access the PMT2 descriptor counter hash table
+							KernelSystem::PMT2DescriptorCounter* cloningPMT2Counter = &(system->activePMT2Counter.at(cloningKey));
+
+																								// find counter to increase
+							auto counterToIncrease = std::find_if(cloningPMT2Counter->sourceDescriptorCounters.begin(), 
+								cloningPMT2Counter->sourceDescriptorCounters.end(),
+								[j](std::pair<unsigned, unsigned>& pair) { return pair.first == j; });
+
+							counterToIncrease->second++;										// increase the counter
+						}
+						else {																	// cloned = 0 => begin cloning
+							std::pair<unsigned, unsigned> newDescCounter = { j, 2 };			// remember descriptor _j_ who will have 2 pointers to it initially
+
+							KernelSystem::PMT2Descriptor* cloningDescriptor = &((*cloningPMT2)[j]);
+
+							cloningDescriptor->basicBits = descriptor->basicBits;
+							cloningDescriptor->advancedBits = descriptor->advancedBits;
+							cloningDescriptor->block = descriptor->block;
+							cloningDescriptor->disk = descriptor->disk;
+
+							descriptor->setCloned();											// set that the two original descriptors are now cloned
+							descriptor->setCopyOnWrite();
+							descriptor->block = cloningDescriptor;								// they share the same entry in the cloning PMT2
+
+							clonedDescriptor->setCloned();
+							clonedDescriptor->setCopyOnWrite();
+							clonedDescriptor->block = cloningDescriptor;
+
+							system->activePMT2Counter[cloningKey].counter++;					// a descriptor in the cloning PMT2 is being used	
+							system->activePMT2Counter[cloningKey].sourceDescriptorCounters.push_back(newDescCounter);	// count the pointers for this descriptor
+						}
+					}
+				}
+
+			}
+
+		}
+	}
+
+	this->cloningPMTRequests = std::vector<CloningPMTRequest>();			// empty the request vector
+
+																			// copy all the segments, add the clone to a shared segment if the original is connected
+																			// also chain cloned descriptors by segment
+	for (auto originalSegment = segments.begin(); originalSegment != segments.end(); originalSegment++) {
+
+																			// first chain the cloned descriptors
+		unsigned short startPMT1Entry = system->extractPage1Part(originalSegment->startAddress);
+		unsigned short startPMT2Entry = system->extractPage2Part(originalSegment->startAddress);
+
+		KernelSystem::PMT2Descriptor* clonedFirstDescAddress = &((*((*clonedProcess->pProcess->PMT1)[startPMT1Entry]))[startPMT2Entry]);
+		KernelSystem::PMT2Descriptor* currentDesc = clonedFirstDescAddress;
+		VirtualAddress blockVirtualAddress = originalSegment->startAddress;
+
+		for (PageNum i = 0; i < originalSegment->length; i++, blockVirtualAddress += PAGE_SIZE) {
+			unsigned short pmt1Entry = system->extractPage1Part(blockVirtualAddress);
+			unsigned short pmt2Entry = system->extractPage2Part(blockVirtualAddress);
+
+			KernelSystem::PMT2Descriptor* next = &((*((*clonedProcess->pProcess->PMT1)[pmt1Entry]))[pmt2Entry]);
+			currentDesc->next = next;										// perform chaining
+			currentDesc = next;
+
+		}
+																			// then create new segment info for the cloned process
+		SegmentInfo clonedSegmentInfo(originalSegment->startAddress, originalSegment->accessType, originalSegment->length, clonedFirstDescAddress);
+
+		if (originalSegment->sharedSegmentName != "") {						// if the original segment is shared, this one is shared as well
+			clonedSegmentInfo.sharedSegmentName = originalSegment->sharedSegmentName;
+			KernelSystem::ReverseSegmentInfo revClonedSegInfo;
+			revClonedSegInfo.process = clonedProcess->pProcess;
+			revClonedSegInfo.firstDescriptor = clonedSegmentInfo.firstDescAddress);
+
+			KernelSystem::SharedSegment* sharedSegment = &(system->sharedSegments.at(originalSegment->sharedSegmentName));
+
+			sharedSegment->numberOfProcessesSharing++;
+			sharedSegment->processesSharing.push_back(revClonedSegInfo);
+		}
+
+		clonedProcess->pProcess->segments.push_back(clonedSegmentInfo);		// no need to insert sorted because the original segments are sorted
+	}
+
+	system->activeProcesses.insert(std::pair<ProcessId, Process*>(system->processIDGenerator - 1, clonedProcess));
 
 	return clonedProcess;
 }

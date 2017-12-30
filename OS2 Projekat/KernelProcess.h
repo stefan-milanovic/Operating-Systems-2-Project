@@ -69,6 +69,18 @@ private:
 
 	bool shouldBlockFlag = false;						// if this flag is true and this process calls blockIfThrashing() it will be blocked
 
+	
+	static const unsigned fixedCloningKey = 1000;		// used for generating a key into the system's PMT2 descriptor counter hash map
+
+	struct CloningPMTRequest {							// Kernel System fills the request vector up with structs of this type
+		unsigned short originalPMT1Entry;
+		bool shouldMakeCloningPMT2 = false;
+
+		CloningPMTRequest(unsigned short pmt1entry)	: originalPMT1Entry(pmt1entry) {}
+	};
+
+	std::vector<CloningPMTRequest> cloningPMTRequests;
+
 	friend class System;
 	friend class KernelSystem;
 

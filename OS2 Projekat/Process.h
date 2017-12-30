@@ -39,6 +39,7 @@ private:
 	KernelProcess *pProcess;
 	friend class System;
 	friend class KernelSystem;
+	friend class KernelProcess;
 };
 
 

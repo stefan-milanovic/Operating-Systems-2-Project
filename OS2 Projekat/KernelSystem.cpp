@@ -192,13 +192,82 @@ Process* KernelSystem::cloneProcess(ProcessId pid) {
 		return nullptr;
 	}
 
-	// TODO: check how much space wantedProcess has and see if it's replicable (both in memory and disk)
+																			// memory and disk are shared until one of the processes performs a write (copy on write technique)
 
-	PageNum wantedProcessCurrentSpace = 1;
+	PageNum spaceToReplicateProcess = 1;									// 1xPMT1
+	for (unsigned short i = 0; i < PMT1Size; i++)							// count PMT2s
+		if ((*(wantedProcess->pProcess->PMT1))[i] != nullptr)
+			spaceToReplicateProcess++;
 
-	// If everything's ok, clone
+	if (spaceToReplicateProcess > numberOfFreePMTSlots) {					// if there's no space already, return
+		mutex.unlock();
+		return nullptr;														// surely insufficient number of slots in PMT memory
+	}
+
+	// check space for every segment -- ignore shared segments, ignore those with cloned = 1, need to count PMT2 that has some shared some non shared
+	// also need to count those without any shared
+
+	// when cloning, for shared segm - copy descriptors, addresses to the shared pmt and find the sharedSegment in the sharedSegments in ysstem and add process there
+	// 
+
+	// three types of PMT2 when counting for cloning:
+	// 1) all pages in the PMT2 have cloned = 0			==> a clone PMT2 must be made
+	// 2) some pages link to shared/cloningPMT2, some have cloned = 0 ==> a clone PMT2 must be made
+	// 3) all pages link to a shared segment or cloning PMT2 ==> no need to clone, just link (and add to shared segment process list if it's a shared seg)
+
+	PMT1* pmt1 = wantedProcess->pProcess->PMT1;
+	enum PMTType { NO_LINKS, SOME_LINKS, ALL_LINKS };
+
+	for (unsigned short i = 0; i < PMT1Size; i++) {							// check if there is enough space to create the cloning PMT2s (if they are needed)
+		PMT2* pmt2 = (*pmt1)[i];
+		if (pmt2 != nullptr) {												// if a pmt2 exists, check to which type it belongs
+			PMTType pmt2Type;
+			unsigned short descriptorsInUseNumber = 0;
+			unsigned short descriptorsWithCloned0 = 0;
+			unsigned short descriptorsWithShared1 = 0;
+			unsigned short descriptorsWithCloned1 = 0;
+
+			for (unsigned short j = 0; j < PMT2Size; j++) {
+				PMT2Descriptor* descriptor = &((*pmt2)[j]);
+				if (descriptor->getInUse()) {								// only observe the page descriptor if it is in use
+					descriptorsInUseNumber++;
+
+					if (descriptor->getCloned())
+						descriptorsWithCloned1++;
+					else
+						descriptorsWithCloned0++;
+
+					if (descriptor->getShared())
+						descriptorsWithShared1++;
+				}
+			}
+
+			KernelProcess::CloningPMTRequest newRequest(i);					// make a new request as this PMT2 wasn't nullptr
+			if (descriptorsInUseNumber == descriptorsWithCloned1 + descriptorsWithShared1)
+				pmt2Type = ALL_LINKS;
+			else if (descriptorsWithCloned0 > 0 && (descriptorsWithCloned1 > 0 || descriptorsWithShared1 > 0))
+				pmt2Type = SOME_LINKS;
+			else
+				pmt2Type = NO_LINKS;
+
+			if (pmt2Type != ALL_LINKS) {
+				spaceToReplicateProcess++;
+				newRequest.shouldMakeCloningPMT2 = true;					// set that a cloning PMT2 should be made
+			}
+
+			wantedProcess->pProcess->cloningPMTRequests.push_back(newRequest);
+		}
+	}
+
+	if (spaceToReplicateProcess > numberOfFreePMTSlots) {					// if there's no space now, return
+		mutex.unlock();
+		return nullptr;														// surely insufficient number of slots in PMT memory
+	}
+
+	Process* clonedProcess = wantedProcess->clone(processIDGenerator++);	// There is enough space to perform cloning
+
 	mutex.unlock();
-	return wantedProcess->clone(processIDGenerator++);
+	return clonedProcess;
 }
 
 // private methods
