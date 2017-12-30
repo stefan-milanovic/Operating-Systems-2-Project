@@ -49,6 +49,24 @@ bool DiskManager::writeToCluster(void* content, ClusterNo cluster) {
 	return true;
 }
 
+ClusterNo DiskManager::writeFromCluster(ClusterNo cluster) {
+	if (clusterUsageVector[clusterUsageVectorHead] == -1) return -1;	// exception -- no free clusters
+
+	ClusterNo chosenCluster = clusterUsageVectorHead;					// choose a free cluster and move the free cluster head
+	clusterUsageVectorHead = clusterUsageVector[clusterUsageVectorHead];
+
+	char* buffer = new char[ClusterSize];
+
+	if (!partition->readCluster(cluster, buffer))
+		return -1;														// read from partition was unsuccessful
+	if (!partition->writeCluster(chosenCluster, buffer))				// Write the content onto the partition.
+		return -1;														// return -1 in case of error
+
+	delete[] buffer;
+	numberOfFreeClusters--;												// decrease the free cluster counter
+	return chosenCluster;
+}
+
 bool DiskManager::read(PhysicalAddress block, ClusterNo cluster) {
 
 	if (cluster < 0 || cluster >= clusterUsageVectorSize) return false;

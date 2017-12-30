@@ -63,14 +63,11 @@ private:
 	};
 
 	std::vector<SegmentInfo> segments;					// current segment list
-	ProcessId id;										// process id
+	ProcessId id;										// process & parent id
 	KernelSystem* system;								// the system this process is being run on, set in system's createProcess()
 	KernelSystem::PMT1* PMT1;							// page map table pointer of the first level, set in system's createProcess()
 
 	bool shouldBlockFlag = false;						// if this flag is true and this process calls blockIfThrashing() it will be blocked
-
-	
-	static const unsigned fixedCloningKey = 1000;		// used for generating a key into the system's PMT2 descriptor counter hash map
 
 	struct CloningPMTRequest {							// Kernel System fills the request vector up with structs of this type
 		unsigned short originalPMT1Entry;

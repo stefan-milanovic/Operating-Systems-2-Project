@@ -29,7 +29,7 @@ KernelSystem::KernelSystem(PhysicalAddress processVMSpace_, PageNum processVMSpa
 	diskManager = new DiskManager(partition_);								// create the manager for the partition
 
 	this->numberOfFreePMTSlots = pmtSpaceSize;
-	// initialise lists
+																			// initialise lists
 	unsigned* blocksTemp = (unsigned*)freeBlocksHead, *pmtTemp = (unsigned*)freePMTSlotHead;
 	for (PageNum i = 0; i < (processVMSpaceSize <= pmtSpaceSize ? pmtSpaceSize : processVMSpaceSize); i++) {
 		if (i < processVMSpaceSize) {										// block list
@@ -64,7 +64,7 @@ Process* KernelSystem::createProcess() {
 
 	mutex.lock();
 
-	if (!numberOfFreePMTSlots) { mutex.unlock(); return nullptr; }					// no space for a new PMT1 at the moment
+	if (!numberOfFreePMTSlots) { mutex.unlock(); return nullptr; }			// no space for a new PMT1 at the moment
 
 	Process* newProcess = new Process(processIDGenerator++);
 
@@ -80,7 +80,7 @@ Process* KernelSystem::createProcess() {
 	for (unsigned short i = 0; i < PMT1Size; i++) {							// initialise all of its pointers to nullptr
 		(*(newProcess->pProcess->PMT1))[i] = nullptr;
 	}
-	// add the new process to the hash map
+																			// add the new process to the hash map
 	activeProcesses.insert(std::pair<ProcessId, Process*>(processIDGenerator - 1, newProcess));
 
 	// do other things if needed
@@ -101,7 +101,7 @@ Time KernelSystem::periodicJob() {											// shift reference bit into referen
 		}
 	}
 
-	return 10;																// 10ms period
+	return 100;																// 100ms period
 
 }
 
@@ -127,6 +127,7 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 			if (consecutivePageFaultsCounter == pageFaultLimitNumber) {		// set flag if limit is reached
 				consecutivePageFaultsCounter = 0;
 				wantedProcess->pProcess->shouldBlockFlag = true;
+				mutex.unlock();
 				return TRAP;												// alert the system
 			}
 		}
@@ -139,6 +140,16 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 		mutex.unlock();
 		return TRAP;														// attempted access of address that doesn't belong to any segment
 	}
+	
+	if (pageDescriptor->getCloned()) {										// if the page is currently cloned, check if it's an attempt to write
+		if (type == WRITE || type == READ_WRITE) {							// if it's a write attempt, the page must first be copied
+			processesAttemptingCopyOnWrite.push_back(pid);
+			mutex.unlock();
+			return PAGE_FAULT;
+		}
+		else
+			pageDescriptor = (PMT2Descriptor*)pageDescriptor->getBlock();	// move on to the cloning PMT2 and the adequate descriptor in there
+	}
 
 	if (pageDescriptor->getShared())										// if this page is of a shared segment, switch to the appropriate descriptor
 		pageDescriptor = (PMT2Descriptor*)pageDescriptor->getBlock();
@@ -149,6 +160,7 @@ Status KernelSystem::access(ProcessId pid, VirtualAddress address, AccessType ty
 			if (consecutivePageFaultsCounter == pageFaultLimitNumber) {		// set flag if limit is reached
 				consecutivePageFaultsCounter = 0;
 				wantedProcess->pProcess->shouldBlockFlag = true;
+				mutex.unlock();
 				return TRAP;												// alert the system
 			}
 		}
@@ -207,13 +219,10 @@ Process* KernelSystem::cloneProcess(ProcessId pid) {
 	// check space for every segment -- ignore shared segments, ignore those with cloned = 1, need to count PMT2 that has some shared some non shared
 	// also need to count those without any shared
 
-	// when cloning, for shared segm - copy descriptors, addresses to the shared pmt and find the sharedSegment in the sharedSegments in ysstem and add process there
-	// 
-
 	// three types of PMT2 when counting for cloning:
-	// 1) all pages in the PMT2 have cloned = 0			==> a clone PMT2 must be made
-	// 2) some pages link to shared/cloningPMT2, some have cloned = 0 ==> a clone PMT2 must be made
-	// 3) all pages link to a shared segment or cloning PMT2 ==> no need to clone, just link (and add to shared segment process list if it's a shared seg)
+	// 1) all pages in the PMT2 have cloned = 0						  ==> a cloning PMT2 must be made
+	// 2) some pages link to shared/cloningPMT2, some have cloned = 0 ==> a cloning PMT2 must be made
+	// 3) all pages link to a shared segment or cloning PMT2		  ==> no need to clone, just link (and add to shared segment process list if it's a shared seg)
 
 	PMT1* pmt1 = wantedProcess->pProcess->PMT1;
 	enum PMTType { NO_LINKS, SOME_LINKS, ALL_LINKS };
@@ -740,6 +749,12 @@ PhysicalAddress KernelSystem::getSwappedBlock() {									// this function alway
 
 	referenceRegisters[victimIndex].value = 0;										// reset history bits of block to zero
 																					// the pointer field is set in pageFault() after this function returns a block address
+
+	if (victim->getShared() || victim->getCloned()) {								// should always enter because cloned = 1
+		victim->resetV();
+		victim->resetReferenced();
+		victim = (PMT2Descriptor*)victim->block;
+	}
 
 	if (victim->getD()) {															// write the block to the disk if it's dirty (always true for never-before-written-to-disk createSegment() pages)
 		if (victim->getHasCluster())												// if the page already has a reserved cluster on the disk, write contents there

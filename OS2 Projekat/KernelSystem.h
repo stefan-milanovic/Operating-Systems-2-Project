@@ -66,6 +66,8 @@ private:																		// private attributes
 
 	std::unordered_map<unsigned, PMT2DescriptorCounter> activePMT2Counter;		// keeps track of the number of descriptors in the allocated PMT2 tables (non-shared)
 
+	std::vector<ProcessId> processesAttemptingCopyOnWrite;						// a small temporary buffer for processes who are attempting copy on write
+
 	PhysicalAddress freePMTSlotHead;											// head for the PMT1 blocks
 	PhysicalAddress freeBlocksHead;												// head for the free physical blocks in memory
 
@@ -82,7 +84,6 @@ private:																		// private attributes
 
 																				// CONSTANTS
 
-
 	static const unsigned short usefulBitLength = 24;
 	static const unsigned short page1PartBitLength = 8;							// lengths of parts of the virtual address (in bits)
 	static const unsigned short page2PartBitLength = 6;
@@ -97,18 +98,18 @@ private:																		// private attributes
 
 	struct PMT2Descriptor {
 		char basicBits = 0;														// _/_/_/execute/write/read/dirty/valid bits
-		char advancedBits = 0;													// _/_/copyOnWrite/isShared/referenced/cloned/hasCluster/inUse bits
+		char advancedBits = 0;													// _/_/_/isShared/referenced/cloned/hasCluster/inUse bits
 
 		// bool hasCluster = 0;													// indicates whether a cluster has been reserved for this page
 		// bool inUse = 0;														// indicates whether the descriptor is in use yet or not
 		// bool isShared = 0;													// if the page is shared, the _block_ field points to the mutual descriptor
 
 		// if isShared == 1														=> only bits ex/wr/rd + inUse are looked at (in the original descriptors)
-		// if cloned == 1														=> only bits ex/wr/rd + inUse + copyOnWrite are looked at
+		// if cloned == 1														=> only bits ex/wr/rd + inUse are looked at (in the original descriptors)
 
 		PhysicalAddress block = nullptr;										// remember pointer to a block of physical memory
 		PMT2Descriptor* next = nullptr;											// next in segment and next in the global politics swapping technique
-		ClusterNo disk;															// which cluster holds this exact page
+		ClusterNo disk;															// cluster that holds this page or the key for the cloning PMT2 (if cloned = 1)
 
 		PMT2Descriptor() {}
 																				// basic bit operations
@@ -121,8 +122,8 @@ private:																		// private attributes
 
 																				// advanced bit operations
 
-		void setCopyOnWrite() { advancedBits |= 0x20; } void resetCopyOnWrite() { advancedBits &= 0xDF; }
-		bool getCopyOnWrite() { return (advancedBits & 0x20) ? true : false; }
+		//void setCopyOnWrite() { advancedBits |= 0x20; } void resetCopyOnWrite() { advancedBits &= 0xDF; }
+		//bool getCopyOnWrite() { return (advancedBits & 0x20) ? true : false; }
 
 		void setShared() { advancedBits |= 0x10; } void resetShared() { advancedBits &= 0xEF; }
 		bool getShared() { return (advancedBits & 0x10) ? true : false; }
@@ -182,7 +183,7 @@ private:
 	PMT2Descriptor* allocateDescriptors(KernelProcess* process, VirtualAddress startAddress,
 		PageNum segmentSize, AccessType flags, bool load, void* content);
 
-						// returns address to first descriptor, allocates a new shared segment descriptor table if need be or places pointers to an existing one
+																				// returns address to first descriptor, allocates a new shared segment descriptor table if need be or places pointers to an existing one
 	PMT2Descriptor* connectToSharedSegment(KernelProcess* process, VirtualAddress startAddress,
 		PageNum segmentSize, const char* name, AccessType flags);
 

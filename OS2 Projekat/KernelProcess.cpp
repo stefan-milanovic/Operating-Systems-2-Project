@@ -2,6 +2,7 @@
 #include <vector>
 #include <iterator>
 #include <algorithm>
+#include <random>
 
 #include "KernelSystem.h"
 #include "KernelProcess.h"
@@ -130,6 +131,59 @@ Status KernelProcess::pageFault(VirtualAddress address) {
 		return TRAP;
 	}
 
+	if (pageDescriptor->getCloned()) {												// if there was a page-fault for a cloned descriptor there's a chance it's a write attempt
+																					// if this process attempted to write it will be in the copyOnWrite buffer
+		auto iterator = std::find(system->processesAttemptingCopyOnWrite.begin(), system->processesAttemptingCopyOnWrite.end(), this->id);
+
+		if (iterator != system->processesAttemptingCopyOnWrite.end()) {				// this process attempted to write in a cloned page
+			system->processesAttemptingCopyOnWrite.erase(iterator);
+
+																					// access cloning descriptor and reserve a slot on the disk
+			KernelSystem::PMT2Descriptor* cloningDescriptor = (KernelSystem::PMT2Descriptor*) pageDescriptor->getBlock();
+
+			if (!system->diskManager->hasEnoughSpace(1)) {
+				system->mutex.unlock();
+				return TRAP;														// no more space on disk
+			}
+			unsigned cloningKey = pageDescriptor->getDisk();
+
+			if (cloningDescriptor->getV()) {										// allocate space on disk for this page
+				pageDescriptor->setDisk(system->diskManager->write(cloningDescriptor->getBlock()));
+			}
+			else {
+				pageDescriptor->setDisk(system->diskManager->writeFromCluster(cloningDescriptor->getDisk()));
+			}
+
+			pageDescriptor->resetV();
+			pageDescriptor->resetCloned();											// this page no longer points to a cloning PMT2
+			//pageDescriptor->resetCopyOnWrite();
+			pageDescriptor->setHasCluster();
+																					// find the cloning PMT2 and decrease counters
+			KernelSystem::PMT2DescriptorCounter* cloningPMT2Counter = &(system->activePMT2Counter.at(cloningKey));
+
+																					// find counter to decrease
+			unsigned pmt2entry = KernelSystem::extractPage2Part(address);
+			auto counterToDecrease = std::find_if(cloningPMT2Counter->sourceDescriptorCounters.begin(),
+				cloningPMT2Counter->sourceDescriptorCounters.end(),
+				[pmt2entry](std::pair<unsigned, unsigned>& pair) { return pair.first == pmt2entry; });
+
+			counterToDecrease->second--;											// decrease the counter
+			if (counterToDecrease->second == 0) {									// if it reached zero, remove the descriptor counter and adjust PMT2 counter
+				cloningPMT2Counter->sourceDescriptorCounters.erase(counterToDecrease);
+				cloningPMT2Counter->counter--;
+				if (cloningPMT2Counter->counter == 0) {								// if the cloning PMT2 is not pointed to at all anymore, deallocate it
+					system->freePMTSlot((PhysicalAddress)cloningPMT2Counter->pmt2StartAddress);
+					system->activePMT2Counter.erase(cloningKey);
+				}
+			}
+
+
+		}
+		else {
+			pageDescriptor = (KernelSystem::PMT2Descriptor*)pageDescriptor->getBlock();
+		}
+	}
+
 	if (pageDescriptor->getShared())												// if this page is of a shared segment, switch to the appropriate descriptor
 		pageDescriptor = (KernelSystem::PMT2Descriptor*)pageDescriptor->getBlock();
 
@@ -166,7 +220,7 @@ PhysicalAddress KernelProcess::getPhysicalAddress(VirtualAddress address) {
 
 	if (!pageDescriptor) return 0;															// pmt2 not allocated
 
-	if (pageDescriptor->getShared())														// if this page is of a shared segment, switch to the appropriate descriptor
+	if (pageDescriptor->getShared() || pageDescriptor->getCloned())							// if this page is of a shared segment, switch to the appropriate descriptor
 		pageDescriptor = (KernelSystem::PMT2Descriptor*)pageDescriptor->getBlock();
 
 	if (!pageDescriptor->getV()) return 0;													// page isn't loaded in memory
@@ -193,7 +247,7 @@ void KernelProcess::blockIfThrashing() {
 			KernelSystem::PMT2Descriptor* temp = segment->firstDescAddress;
 			for (PageNum i = 0; i < segment->length; i++, temp = temp->next) {
 
-				if (temp->getShared())
+				if (temp->getShared() || temp->getCloned())
 					temp = (KernelSystem::PMT2Descriptor*)temp->getBlock();
 
 				if (temp->getV()) {																// if this descriptor has a page in memory 
@@ -207,7 +261,7 @@ void KernelProcess::blockIfThrashing() {
 								system->mutex.unlock();
 								return;															// no room on the disk or error while writing
 							}
-							temp->setHasCluster();											// the victim now has a cluster on the disk
+							temp->setHasCluster();												// the victim now has a cluster on the disk
 						}
 						temp->resetD();
 					}
@@ -232,7 +286,6 @@ Process* KernelProcess::clone(ProcessId pid) {
 	// this method doesn't need to check for space, it just performs cloning (KernelSystem has checked this already)
 
 	Process* clonedProcess = new Process(pid);
-
 	clonedProcess->pProcess->system = system;								// initialise system pointer and get a PMT1 slot
 	clonedProcess->pProcess->PMT1 = (KernelSystem::PMT1*)system->getFreePMTSlot();
 
@@ -255,7 +308,11 @@ Process* KernelProcess::clone(ProcessId pid) {
 			KernelSystem::PMT2DescriptorCounter newPMT2Counter(clonedPMT2);						// add new PMT2 to the system's PMT2 descriptor counter
 			system->activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(pageKey, newPMT2Counter));
 
-			CloningPMTRequest request = this->cloningPMTRequests[i];							// clone info
+																								// clone info
+			CloningPMTRequest request = *(find_if(cloningPMTRequests.begin(),
+				cloningPMTRequests.end(), [i](CloningPMTRequest& request) {
+				return request.originalPMT1Entry == i;
+			}));							
 			KernelSystem::PMT2* cloningPMT2 = nullptr;
 			KernelSystem::PMT2DescriptorCounter cloningPMT2Counter;								// remember counters for the cloning PMT2 as well
 			unsigned cloningKey;
@@ -264,7 +321,9 @@ Process* KernelProcess::clone(ProcessId pid) {
 				cloningPMT2 = (KernelSystem::PMT2*)system->getFreePMTSlot();
 				system->initialisePMT2(cloningPMT2);
 
-				cloningKey = system->simpleHash(fixedCloningKey, i);							// key used to access the PMT2 descriptor counter hash table
+				std::default_random_engine generator(time(0));
+				std::uniform_int_distribution<unsigned> randomKeyGenerator;
+				cloningKey = randomKeyGenerator(generator);										// key used to access the PMT2 descriptor counter hash table
 				cloningPMT2Counter.counter = 0;
 				cloningPMT2Counter.pmt2StartAddress = cloningPMT2;
 				system->activePMT2Counter.insert(std::pair<unsigned, KernelSystem::PMT2DescriptorCounter>(cloningKey, cloningPMT2Counter));
@@ -280,8 +339,7 @@ Process* KernelProcess::clone(ProcessId pid) {
 					system->activePMT2Counter[pageKey].counter++;								// a new descriptor is being added to this cloned PMT2 -- increase the counter
 					clonedDescriptor->basicBits = descriptor->basicBits;						// the bits stay the same
 					clonedDescriptor->advancedBits = descriptor->advancedBits;
-					
-					// disk should never be set in here, it's always in either shared segment PMT2 or a cloning PMT2
+					// disk should never be set in here, it's always in either shared segment PMT2 or a cloning PMT2 (or hold a hash table key)
 					// block is set depending on the bits in the original
 					// next is set while creating the segments for the process
 
@@ -293,7 +351,9 @@ Process* KernelProcess::clone(ProcessId pid) {
 
 							clonedDescriptor->block = descriptor->block;						// set the cloned block to point
 
-							cloningKey = system->simpleHash(fixedCloningKey, i);				// key used to access the PMT2 descriptor counter hash table
+							cloningKey = descriptor->getDisk();									// key used to access the PMT2 descriptor counter hash table
+							clonedDescriptor->setDisk(cloningKey);								// set the hash key in the new descriptor
+
 							KernelSystem::PMT2DescriptorCounter* cloningPMT2Counter = &(system->activePMT2Counter.at(cloningKey));
 
 																								// find counter to increase
@@ -313,12 +373,17 @@ Process* KernelProcess::clone(ProcessId pid) {
 							cloningDescriptor->block = descriptor->block;
 							cloningDescriptor->disk = descriptor->disk;
 
+							//if (descriptor->getV()) {											// if there is a page in memory, switch the reference register pointer
+							//}
+
+							descriptor->disk = clonedDescriptor->disk = cloningKey;				// remember the key in both 
+
 							descriptor->setCloned();											// set that the two original descriptors are now cloned
-							descriptor->setCopyOnWrite();
+							// descriptor->setCopyOnWrite();
 							descriptor->block = cloningDescriptor;								// they share the same entry in the cloning PMT2
 
 							clonedDescriptor->setCloned();
-							clonedDescriptor->setCopyOnWrite();
+							// clonedDescriptor->setCopyOnWrite();
 							clonedDescriptor->block = cloningDescriptor;
 
 							system->activePMT2Counter[cloningKey].counter++;					// a descriptor in the cloning PMT2 is being used	
@@ -339,16 +404,16 @@ Process* KernelProcess::clone(ProcessId pid) {
 	for (auto originalSegment = segments.begin(); originalSegment != segments.end(); originalSegment++) {
 
 																			// first chain the cloned descriptors
-		unsigned short startPMT1Entry = system->extractPage1Part(originalSegment->startAddress);
-		unsigned short startPMT2Entry = system->extractPage2Part(originalSegment->startAddress);
+		unsigned short startPMT1Entry = KernelSystem::extractPage1Part(originalSegment->startAddress);
+		unsigned short startPMT2Entry = KernelSystem::extractPage2Part(originalSegment->startAddress);
 
 		KernelSystem::PMT2Descriptor* clonedFirstDescAddress = &((*((*clonedProcess->pProcess->PMT1)[startPMT1Entry]))[startPMT2Entry]);
 		KernelSystem::PMT2Descriptor* currentDesc = clonedFirstDescAddress;
-		VirtualAddress blockVirtualAddress = originalSegment->startAddress;
+		VirtualAddress blockVirtualAddress = originalSegment->startAddress + PAGE_SIZE;		// start from the second page
 
-		for (PageNum i = 0; i < originalSegment->length; i++, blockVirtualAddress += PAGE_SIZE) {
-			unsigned short pmt1Entry = system->extractPage1Part(blockVirtualAddress);
-			unsigned short pmt2Entry = system->extractPage2Part(blockVirtualAddress);
+		for (PageNum i = 1; i < originalSegment->length; i++, blockVirtualAddress += PAGE_SIZE) {
+			unsigned short pmt1Entry = KernelSystem::extractPage1Part(blockVirtualAddress);
+			unsigned short pmt2Entry = KernelSystem::extractPage2Part(blockVirtualAddress);
 
 			KernelSystem::PMT2Descriptor* next = &((*((*clonedProcess->pProcess->PMT1)[pmt1Entry]))[pmt2Entry]);
 			currentDesc->next = next;										// perform chaining
@@ -362,7 +427,7 @@ Process* KernelProcess::clone(ProcessId pid) {
 			clonedSegmentInfo.sharedSegmentName = originalSegment->sharedSegmentName;
 			KernelSystem::ReverseSegmentInfo revClonedSegInfo;
 			revClonedSegInfo.process = clonedProcess->pProcess;
-			revClonedSegInfo.firstDescriptor = clonedSegmentInfo.firstDescAddress);
+			revClonedSegInfo.firstDescriptor = clonedSegmentInfo.firstDescAddress;
 
 			KernelSystem::SharedSegment* sharedSegment = &(system->sharedSegments.at(originalSegment->sharedSegmentName));
 
@@ -556,10 +621,46 @@ void KernelProcess::releaseMemoryAndDisk(SegmentInfo* segment) {
 
 	KernelSystem::PMT2Descriptor* temp = segment->firstDescAddress;
 	VirtualAddress tempAddress = segment->startAddress;
-	// for each page of the segment do
+																					// for each page of the segment do
 	for (PageNum i = 0; i < segment->length; i++, temp = temp->next, tempAddress += PAGE_SIZE) {
 
-		if (!temp->getShared()) {														// only free memory and disk if it's not a shared page
+		// if it's a cloned page the cloning PMT2s, memory and disk can be declared as free if this is the last process pointing to it
+
+		if (temp->getCloned()) {
+			KernelSystem::PMT2Descriptor* cloningDesc = (KernelSystem::PMT2Descriptor*)temp->getBlock();
+
+																					// find the cloning PMT2 and decrease counters
+			unsigned cloningKey = temp->getDisk();
+			KernelSystem::PMT2DescriptorCounter* cloningPMT2Counter = &(system->activePMT2Counter.at(cloningKey));
+
+																					// find counter to decrease
+			unsigned pmt2entry = KernelSystem::extractPage2Part(tempAddress);
+			auto counterToDecrease = std::find_if(cloningPMT2Counter->sourceDescriptorCounters.begin(),
+				cloningPMT2Counter->sourceDescriptorCounters.end(),
+				[pmt2entry](std::pair<unsigned, unsigned>& pair) { return pair.first == pmt2entry; });
+
+			counterToDecrease->second--;											// decrease the counter
+			if (counterToDecrease->second == 0) {									// if it reached zero, remove the descriptor counter and adjust PMT2 counter
+
+																					// it reaching zero means that for this descriptor it's possible to free memory and disk
+				if (cloningDesc->getV()) {											// if the page is in memory, declare the block as free
+					system->setFreeBlock(cloningDesc->block);
+				}
+
+				if (cloningDesc->getHasCluster()) {									// if the page is saved on disk, declare the cluster as free
+					system->diskManager->freeCluster(cloningDesc->disk);
+				}
+
+				cloningPMT2Counter->sourceDescriptorCounters.erase(counterToDecrease);
+				cloningPMT2Counter->counter--;
+				if (cloningPMT2Counter->counter == 0) {								// if the cloning PMT2 is not pointed to at all anymore, deallocate it
+					system->freePMTSlot((PhysicalAddress)cloningPMT2Counter->pmt2StartAddress);
+					system->activePMT2Counter.erase(cloningKey);
+				}
+			}
+		}
+
+		if (!temp->getShared() && !temp->getCloned()) {									// only free memory and disk if it's not a shared page
 			if (temp->getV()) {															// if the page is in memory, declare the block as free
 				system->setFreeBlock(temp->block);
 			}
